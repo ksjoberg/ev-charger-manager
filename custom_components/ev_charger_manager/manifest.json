@@ -1,0 +1,10 @@
+{
+  "domain": "ev_charger_manager",
+  "name": "EV Charger Manager",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/ksjoberg/ev-charger-manager",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/ksjoberg/ev-charger-manager/issues",
+  "version": "0.1.0"
+}

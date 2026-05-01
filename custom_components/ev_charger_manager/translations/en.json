@@ -1,0 +1,148 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Charger Setup",
+        "description": "Configure your EV charger entity and current limits.",
+        "data": {
+          "charger_current_entity": "Charger current entity",
+          "min_current": "Minimum charge current",
+          "max_current": "Maximum charge current",
+          "phases": "Number of phases",
+          "voltage": "Phase voltage"
+        },
+        "data_description": {
+          "charger_current_entity": "A number entity that controls the allowed charge current of the charge box (in Amperes).",
+          "min_current": "The lowest current the charger accepts (typically 6 A for IEC 61851).",
+          "max_current": "The highest current the charger is rated for.",
+          "phases": "1 for single-phase, 3 for three-phase installation.",
+          "voltage": "Nominal line-to-neutral voltage (230 V in Europe, 120 V in North America)."
+        }
+      },
+      "solar": {
+        "title": "Solar / PV Setup",
+        "description": "Configure your photovoltaic installation so the manager can estimate solar output from weather and sun position.",
+        "data": {
+          "pv_peak_power": "PV system peak power",
+          "weather_entity": "Weather entity",
+          "pv_power_entity": "PV power sensor (optional)",
+          "grid_power_entity": "Grid power sensor (optional)"
+        },
+        "data_description": {
+          "pv_peak_power": "Nameplate capacity of your PV system in kWp. Set to 0 to disable solar estimation.",
+          "weather_entity": "Used to estimate cloud attenuation of solar output.",
+          "pv_power_entity": "Sensor reporting actual PV output in W or kW. When provided, replaces the weather-based estimate.",
+          "grid_power_entity": "Sensor reporting grid power (positive = export to grid). When provided, the measured solar export is used instead of the estimate."
+        }
+      },
+      "pricing": {
+        "title": "Electricity Pricing",
+        "description": "Connect a Nordpool (or compatible) price sensor to enable cost-aware charging.",
+        "data": {
+          "nordpool_entity": "Nordpool / spot price sensor (optional)"
+        },
+        "data_description": {
+          "nordpool_entity": "Any sensor whose state is the current spot price per kWh and whose attributes contain today's (and optionally tomorrow's) hourly prices. Both the unofficial 'nordpool' HACS integration and the official Nordpool integration are supported."
+        }
+      },
+      "ev": {
+        "title": "EV Battery",
+        "description": "Optionally connect entities from your car integration to let the manager calculate how many kWh remain until the target charge level is reached.",
+        "data": {
+          "ev_battery_capacity_entity": "Battery capacity entity (optional)",
+          "ev_target_soc_entity": "Charge target level entity (optional)",
+          "ev_soc_entity": "Current SoC entity (optional)"
+        },
+        "data_description": {
+          "ev_battery_capacity_entity": "Sensor or number entity reporting the usable battery capacity in kWh.",
+          "ev_target_soc_entity": "Sensor or number entity reporting the desired charge level in %.",
+          "ev_soc_entity": "Sensor or number entity reporting the current state of charge in %."
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "Entity not found in Home Assistant. Check the entity ID.",
+      "not_a_number_entity": "The charger entity must belong to the 'number' domain."
+    },
+    "abort": {
+      "already_configured": "This charger is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Reconfigure EV Charger Manager",
+        "data": {
+          "charger_current_entity": "Charger current entity",
+          "min_current": "Minimum charge current",
+          "max_current": "Maximum charge current",
+          "phases": "Number of phases",
+          "voltage": "Phase voltage",
+          "pv_peak_power": "PV system peak power",
+          "weather_entity": "Weather entity",
+          "pv_power_entity": "PV power sensor",
+          "grid_power_entity": "Grid power sensor",
+          "nordpool_entity": "Nordpool / spot price sensor",
+          "charge_hours_needed": "Cheap hours needed per day",
+          "ev_battery_capacity_entity": "Battery capacity entity",
+          "ev_target_soc_entity": "Charge target level entity",
+          "ev_soc_entity": "Current SoC entity"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "Entity not found in Home Assistant."
+    }
+  },
+  "entity": {
+    "select": {
+      "charge_mode": {
+        "name": "Charge mode",
+        "state": {
+          "asap": "ASAP",
+          "solar_excess": "Solar excess",
+          "minimize_cost": "Minimize cost"
+        }
+      }
+    },
+    "sensor": {
+      "applied_current": {
+        "name": "Applied charge current"
+      },
+      "solar_power": {
+        "name": "Estimated solar power"
+      },
+      "current_price": {
+        "name": "Current spot price"
+      },
+      "charge_reason": {
+        "name": "Charge decision reason"
+      },
+      "ev_kwh_needed": {
+        "name": "Energy needed to reach target"
+      },
+      "grid_export": {
+        "name": "Grid export power"
+      }
+    },
+    "number": {
+      "min_current": {
+        "name": "Minimum charge current"
+      },
+      "max_current": {
+        "name": "Maximum charge current"
+      },
+      "charge_hours_needed": {
+        "name": "Cheap hours needed"
+      }
+    }
+  },
+  "selector": {
+    "phases": {
+      "options": {
+        "1": "Single-phase (1×)",
+        "3": "Three-phase (3×)"
+      }
+    }
+  }
+}
