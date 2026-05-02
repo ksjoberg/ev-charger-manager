@@ -100,7 +100,8 @@
         "state": {
           "asap": "ASAP",
           "solar_excess": "Solar excess",
-          "minimize_cost": "Minimize cost"
+          "minimize_cost": "Minimize cost",
+          "solar_price_blend": "Solar + Price"
         }
       }
     },
@@ -133,6 +134,12 @@
       },
       "max_current": {
         "name": "Maximum charge current"
+      },
+      "price_awareness": {
+        "name": "Price awareness"
+      },
+      "charge_deadband": {
+        "name": "Current change dead-band"
       }
     }
   },

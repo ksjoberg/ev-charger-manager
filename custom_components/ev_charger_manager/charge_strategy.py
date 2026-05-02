@@ -75,6 +75,89 @@ def strategy_solar_excess(
     )
 
 
+def strategy_solar_price_blend(
+    solar_power_kw: float,
+    min_current: float,
+    max_current: float,
+    phases: int,
+    voltage: float,
+    price_awareness: float,
+    current_price: float,
+    hourly_prices: list[float],
+    charge_hours_needed: int,
+    grid_export_kw: float | None = None,
+    ev_charging_kw: float = 0.0,
+) -> ChargeDecision:
+    """Blend solar-excess and price-aware charging.
+
+    Base current mirrors SOLAR_EXCESS. During the cheapest charge_hours_needed
+    slots, the current is boosted toward max_current by a factor of
+    price_awareness (0 = pure solar, 1 = full boost to max regardless of solar).
+
+    Args:
+        solar_power_kw: Estimated or measured PV output in kW.
+        min_current: Minimum current the charger accepts.
+        max_current: Maximum allowed current.
+        phases: Number of AC phases.
+        voltage: Phase voltage in V.
+        price_awareness: Blend factor 0.0–1.0.
+        current_price: Current spot price.
+        hourly_prices: All available hourly prices for threshold calculation.
+        charge_hours_needed: Number of cheap slots to target (already scaled for
+            sub-hourly granularity).
+        grid_export_kw: Measured grid export; takes priority over solar estimate.
+        ev_charging_kw: Current EV draw included in the grid/consumption reading;
+            added back to recover true available excess.
+    """
+    # Step 1 – solar baseline (same as SOLAR_EXCESS)
+    available_kw = (grid_export_kw if grid_export_kw is not None else solar_power_kw) + ev_charging_kw
+    solar_amps = min(max_current, max(0.0, (available_kw * 1000.0) / (phases * voltage)))
+
+    # Step 2 – cheap-slot detection (same threshold as MINIMIZE_COST)
+    in_cheap_slot = False
+    threshold: float | None = None
+    if hourly_prices and price_awareness > 0:
+        n = max(1, min(charge_hours_needed, len(hourly_prices)))
+        sorted_prices = sorted(p for p in hourly_prices if p is not None)
+        if sorted_prices:
+            threshold = sorted_prices[n - 1]
+            in_cheap_slot = current_price <= threshold
+
+    # Step 3 – blend toward max_current during cheap slots
+    if in_cheap_slot:
+        target = solar_amps + price_awareness * (max_current - solar_amps)
+    else:
+        target = solar_amps
+    target = min(max_current, target)
+
+    # Step 4 – min_current gate
+    if target < min_current:
+        slot_note = f"price {current_price:.4f} ≤ {threshold:.4f}, " if in_cheap_slot and threshold is not None else ""
+        return ChargeDecision(
+            target_current=0.0,
+            reason=(
+                f"Solar+price: {slot_note}{available_kw:.2f} kW → {target:.1f} A "
+                f"below minimum {min_current:.0f} A – pausing"
+            ),
+        )
+
+    if in_cheap_slot and threshold is not None:
+        boost = target - solar_amps
+        return ChargeDecision(
+            target_current=round(target, 1),
+            reason=(
+                f"Solar+price: {available_kw:.2f} kW solar + {boost:.1f} A price boost "
+                f"(price {current_price:.4f} ≤ {threshold:.4f}, awareness {price_awareness:.0%}) "
+                f"→ {target:.1f} A"
+            ),
+        )
+
+    return ChargeDecision(
+        target_current=round(target, 1),
+        reason=f"Solar+price: {available_kw:.2f} kW → {target:.1f} A (no cheap slot)",
+    )
+
+
 def strategy_minimize_cost(
     current_price: float,
     hourly_prices: list[float],

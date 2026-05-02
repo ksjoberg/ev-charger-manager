@@ -9,14 +9,18 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .charge_strategy import (
+    ChargeDecision,
     strategy_asap,
     strategy_minimize_cost,
     strategy_solar_excess,
+    strategy_solar_price_blend,
 )
 from .const import (
+    CONF_CHARGE_DEADBAND,
     CONF_CHARGE_MODE,
     CONF_CHARGER_CURRENT_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_PRICE_AWARENESS,
     CONF_PV_POWER_ENTITY,
     CONF_MAX_CURRENT,
     CONF_MIN_CURRENT,
@@ -28,11 +32,13 @@ from .const import (
     CONF_PV_PEAK_POWER,
     CONF_VOLTAGE,
     CONF_WEATHER_ENTITY,
+    DEFAULT_CHARGE_DEADBAND,
     DEFAULT_CHARGE_HOURS,
     DEFAULT_CHARGE_MODE,
     DEFAULT_MAX_CURRENT,
     DEFAULT_MIN_CURRENT,
     DEFAULT_PHASES,
+    DEFAULT_PRICE_AWARENESS,
     DEFAULT_VOLTAGE,
     DOMAIN,
     LOGGER,
@@ -92,6 +98,28 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         self.hass.config_entries.async_update_entry(
             self.config_entry,
             options={**self.config_entry.options, CONF_MAX_CURRENT: value},
+        )
+
+    @property
+    def price_awareness(self) -> float:
+        return float(self.config_entry.options.get(CONF_PRICE_AWARENESS, DEFAULT_PRICE_AWARENESS))
+
+    @price_awareness.setter
+    def price_awareness(self, value: float) -> None:
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={**self.config_entry.options, CONF_PRICE_AWARENESS: value},
+        )
+
+    @property
+    def charge_deadband(self) -> float:
+        return float(self.config_entry.options.get(CONF_CHARGE_DEADBAND, DEFAULT_CHARGE_DEADBAND))
+
+    @charge_deadband.setter
+    def charge_deadband(self, value: float) -> None:
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={**self.config_entry.options, CONF_CHARGE_DEADBAND: value},
         )
 
     @property
@@ -232,7 +260,11 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         # --- Determine target current ---
         mode = self.current_mode
 
-        if mode == ChargeMode.ASAP:
+        # Stop immediately when EV has reached its target SoC
+        if result.ev_kwh_needed is not None and result.ev_kwh_needed <= 0:
+            decision = ChargeDecision(target_current=0.0, reason="EV has reached target SoC – stopping")
+
+        elif mode == ChargeMode.ASAP:
             decision = strategy_asap(self.max_current)
 
         elif mode == ChargeMode.SOLAR_EXCESS:
@@ -248,6 +280,25 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 ev_charging_kw=ev_charging_kw,
             )
 
+        elif mode == ChargeMode.SOLAR_PRICE_BLEND:
+            prev_current = self.data.applied_current if self.data else 0.0
+            ev_charging_kw = (prev_current * self.phases * self.voltage) / 1000.0
+            hours = result.charge_hours_needed if result.charge_hours_needed is not None else DEFAULT_CHARGE_HOURS
+            charge_slots = max(1, round(hours * slots_per_hour))
+            decision = strategy_solar_price_blend(
+                solar_power_kw=result.solar_power_kw,
+                min_current=self.min_current,
+                max_current=self.max_current,
+                phases=self.phases,
+                voltage=self.voltage,
+                price_awareness=self.price_awareness,
+                current_price=result.current_price or 0.0,
+                hourly_prices=result.hourly_prices,
+                charge_hours_needed=charge_slots,
+                grid_export_kw=result.grid_export_kw,
+                ev_charging_kw=ev_charging_kw,
+            )
+
         else:  # MINIMIZE_COST
             hours = result.charge_hours_needed if result.charge_hours_needed is not None else DEFAULT_CHARGE_HOURS
             charge_slots = max(1, round(hours * slots_per_hour))
@@ -259,8 +310,11 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 charge_hours_needed=charge_slots,
             )
 
-        # Round to whole amperes before applying
+        # Round to whole amperes; apply dead-band to suppress minor fluctuations
         target_amps = round(decision.target_current)
+        prev_applied = int(self.data.applied_current) if self.data else 0
+        if target_amps > 0 and prev_applied > 0 and abs(target_amps - prev_applied) <= self.charge_deadband:
+            target_amps = prev_applied
         result.applied_current = float(target_amps)
         result.charge_reason = decision.reason
 

@@ -26,6 +26,8 @@ CONF_EV_SOC_ENTITY = "ev_soc_entity"
 # Options keys (stored in entry.options, changeable at runtime)
 CONF_CHARGE_MODE = "charge_mode"
 CONF_CHARGE_HOURS = "charge_hours_needed"
+CONF_PRICE_AWARENESS = "price_awareness"
+CONF_CHARGE_DEADBAND = "charge_deadband"
 
 # Defaults
 DEFAULT_MIN_CURRENT = 6
@@ -33,6 +35,8 @@ DEFAULT_MAX_CURRENT = 16
 DEFAULT_PHASES = 1
 DEFAULT_VOLTAGE = 230
 DEFAULT_CHARGE_HOURS = 4
+DEFAULT_PRICE_AWARENESS = 0.5
+DEFAULT_CHARGE_DEADBAND = 1.0
 
 # Update interval in minutes
 UPDATE_INTERVAL_MINUTES = 5
@@ -42,9 +46,10 @@ class ChargeMode(StrEnum):
     ASAP = "asap"
     SOLAR_EXCESS = "solar_excess"
     MINIMIZE_COST = "minimize_cost"
+    SOLAR_PRICE_BLEND = "solar_price_blend"
 
 
-CHARGE_MODES = [ChargeMode.ASAP, ChargeMode.SOLAR_EXCESS, ChargeMode.MINIMIZE_COST]
+CHARGE_MODES = [ChargeMode.ASAP, ChargeMode.SOLAR_EXCESS, ChargeMode.MINIMIZE_COST, ChargeMode.SOLAR_PRICE_BLEND]
 DEFAULT_CHARGE_MODE = ChargeMode.ASAP
 
 # Weather condition → solar attenuation factor (0.0–1.0)
