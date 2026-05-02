@@ -9,7 +9,6 @@ from homeassistant import config_entries
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_CHARGE_HOURS,
     CONF_CHARGE_MODE,
     CONF_CHARGER_CURRENT_ENTITY,
     CONF_EV_BATTERY_CAPACITY_ENTITY,
@@ -24,7 +23,6 @@ from .const import (
     CONF_PV_PEAK_POWER,
     CONF_VOLTAGE,
     CONF_WEATHER_ENTITY,
-    DEFAULT_CHARGE_HOURS,
     DEFAULT_CHARGE_MODE,
     DEFAULT_MAX_CURRENT,
     DEFAULT_MIN_CURRENT,
@@ -271,7 +269,6 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     data=self._data,
                     options={
                         CONF_CHARGE_MODE: DEFAULT_CHARGE_MODE.value,
-                        CONF_CHARGE_HOURS: DEFAULT_CHARGE_HOURS,
                         CONF_MIN_CURRENT: float(min_a),
                         CONF_MAX_CURRENT: float(max_a),
                     },
@@ -356,9 +353,6 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                 )
                 new_options[CONF_MAX_CURRENT] = float(
                     user_input.get(CONF_MAX_CURRENT, DEFAULT_MAX_CURRENT)
-                )
-                new_options[CONF_CHARGE_HOURS] = int(
-                    user_input.get(CONF_CHARGE_HOURS, DEFAULT_CHARGE_HOURS)
                 )
 
                 self.hass.config_entries.async_update_entry(
@@ -447,16 +441,6 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         default=data.get(CONF_NORDPOOL_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
-                    ),
-                    vol.Optional(
-                        CONF_CHARGE_HOURS,
-                        default=opts.get(CONF_CHARGE_HOURS, DEFAULT_CHARGE_HOURS),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=1, max=24, step=1,
-                            unit_of_measurement="h",
-                            mode=selector.NumberSelectorMode.BOX,
-                        )
                     ),
                     vol.Optional(
                         CONF_EV_BATTERY_CAPACITY_ENTITY,

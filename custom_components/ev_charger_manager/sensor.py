@@ -85,6 +85,14 @@ SENSOR_DESCRIPTIONS: tuple[EVChargerSensorDescription, ...] = (
         icon="mdi:battery-charging",
         value_fn=lambda d: d.ev_kwh_needed,
     ),
+    EVChargerSensorDescription(
+        key="charge_hours_needed",
+        translation_key="charge_hours_needed",
+        native_unit_of_measurement="h",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:clock-outline",
+        value_fn=lambda d: round(d.charge_hours_needed, 1) if d.charge_hours_needed is not None else None,
+    ),
 )
 
 

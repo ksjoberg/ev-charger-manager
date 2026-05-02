@@ -83,7 +83,6 @@
           "pv_power_entity": "PV power sensor",
           "grid_power_entity": "Grid power sensor",
           "nordpool_entity": "Nordpool / spot price sensor",
-          "charge_hours_needed": "Cheap hours needed per day",
           "ev_battery_capacity_entity": "Battery capacity entity",
           "ev_target_soc_entity": "Charge target level entity",
           "ev_soc_entity": "Current SoC entity"
@@ -121,6 +120,9 @@
       "ev_kwh_needed": {
         "name": "Energy needed to reach target"
       },
+      "charge_hours_needed": {
+        "name": "Charge time needed"
+      },
       "grid_export": {
         "name": "Grid export power"
       }
@@ -131,9 +133,6 @@
       },
       "max_current": {
         "name": "Maximum charge current"
-      },
-      "charge_hours_needed": {
-        "name": "Cheap hours needed"
       }
     }
   },

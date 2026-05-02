@@ -35,3 +35,4 @@ class EVChargerData:
     charge_reason: str = ""
     grid_export_kw: float | None = None
     ev_kwh_needed: float | None = None
+    charge_hours_needed: float | None = None

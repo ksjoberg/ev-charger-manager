@@ -28,7 +28,6 @@ async def async_setup_entry(
         [
             EVChargerMinCurrentNumber(coordinator),
             EVChargerMaxCurrentNumber(coordinator),
-            EVChargerHoursNumber(coordinator),
         ]
     )
 
@@ -79,24 +78,3 @@ class EVChargerMaxCurrentNumber(EVChargerManagerEntity, NumberEntity):
         await self.coordinator.async_request_refresh()
 
 
-class EVChargerHoursNumber(EVChargerManagerEntity, NumberEntity):
-    """Number of cheap hours to target per day (Minimize Cost mode)."""
-
-    _attr_icon = "mdi:clock-outline"
-    _attr_native_min_value = 1
-    _attr_native_max_value = 24
-    _attr_native_step = 1
-    _attr_mode = NumberMode.BOX
-    _attr_native_unit_of_measurement = "h"
-    _attr_translation_key = "charge_hours_needed"
-
-    def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
-        super().__init__(coordinator, unique_id_suffix="charge_hours_needed")
-
-    @property
-    def native_value(self) -> float:
-        return float(self.coordinator.charge_hours_needed)
-
-    async def async_set_native_value(self, value: float) -> None:
-        self.coordinator.charge_hours_needed = int(value)
-        await self.coordinator.async_request_refresh()

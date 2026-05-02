@@ -14,7 +14,6 @@ from .charge_strategy import (
     strategy_solar_excess,
 )
 from .const import (
-    CONF_CHARGE_HOURS,
     CONF_CHARGE_MODE,
     CONF_CHARGER_CURRENT_ENTITY,
     CONF_GRID_POWER_ENTITY,
@@ -152,18 +151,6 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             options={**self.config_entry.options, CONF_CHARGE_MODE: mode.value},
         )
 
-    @property
-    def charge_hours_needed(self) -> int:
-        return int(
-            self.config_entry.options.get(CONF_CHARGE_HOURS, DEFAULT_CHARGE_HOURS)
-        )
-
-    @charge_hours_needed.setter
-    def charge_hours_needed(self, value: int) -> None:
-        self.hass.config_entries.async_update_entry(
-            self.config_entry,
-            options={**self.config_entry.options, CONF_CHARGE_HOURS: value},
-        )
 
     # ------------------------------------------------------------------
     # Main update logic
@@ -237,6 +224,11 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         # --- EV state of charge / kWh needed ---
         result.ev_kwh_needed = self._compute_ev_kwh_needed()
 
+        # --- Hours needed at max current ---
+        charging_power_kw = (self.max_current * self.phases * self.voltage) / 1000.0
+        if result.ev_kwh_needed is not None and charging_power_kw > 0:
+            result.charge_hours_needed = result.ev_kwh_needed / charging_power_kw
+
         # --- Determine target current ---
         mode = self.current_mode
 
@@ -257,7 +249,8 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             )
 
         else:  # MINIMIZE_COST
-            charge_slots = max(1, self.charge_hours_needed * slots_per_hour)
+            hours = result.charge_hours_needed if result.charge_hours_needed is not None else DEFAULT_CHARGE_HOURS
+            charge_slots = max(1, round(hours * slots_per_hour))
             decision = strategy_minimize_cost(
                 current_price=result.current_price or 0.0,
                 hourly_prices=result.hourly_prices,
