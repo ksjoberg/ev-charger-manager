@@ -31,6 +31,18 @@ class EVChargerSensorDescription(SensorEntityDescription):
     value_fn: object = None  # Callable[[EVChargerData], StateType]
 
 
+FORECAST_SOLAR_SENSORS: tuple[EVChargerSensorDescription, ...] = (
+    EVChargerSensorDescription(
+        key="solar_forecast_now",
+        translation_key="solar_forecast_now",
+        native_unit_of_measurement=UnitOfPower.KILO_WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:solar-power-variant",
+        value_fn=lambda d: round(d.hourly_solar_forecast[0], 3) if d.hourly_solar_forecast else None,
+    ),
+)
+
 GRID_EXPORT_SENSORS: tuple[EVChargerSensorDescription, ...] = (
     EVChargerSensorDescription(
         key="grid_export",
@@ -104,6 +116,8 @@ async def async_setup_entry(
     """Set up EV Charger Manager sensor entities."""
     coordinator = entry.runtime_data.coordinator
     descriptions = list(SENSOR_DESCRIPTIONS)
+    if coordinator.forecast_solar_entities:
+        descriptions.extend(FORECAST_SOLAR_SENSORS)
     if coordinator.grid_power_entity:
         descriptions.extend(GRID_EXPORT_SENSORS)
     async_add_entities(

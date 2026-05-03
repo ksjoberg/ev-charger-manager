@@ -14,6 +14,7 @@ from .const import (
     CONF_EV_BATTERY_CAPACITY_ENTITY,
     CONF_EV_SOC_ENTITY,
     CONF_EV_TARGET_SOC_ENTITY,
+    CONF_FORECAST_SOLAR_ENTITIES,
     CONF_GRID_POWER_ENTITY,
     CONF_PV_POWER_ENTITY,
     CONF_MAX_CURRENT,
@@ -160,9 +161,14 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 if state is None:
                     errors[CONF_GRID_POWER_ENTITY] = "entity_not_found"
 
+            for eid in (user_input.get(CONF_FORECAST_SOLAR_ENTITIES) or []):
+                if self.hass.states.get(eid) is None:
+                    errors[CONF_FORECAST_SOLAR_ENTITIES] = "entity_not_found"
+                    break
+
             if not errors:
                 self._data.update(
-                    {k: v for k, v in user_input.items() if v not in (None, "")}
+                    {k: v for k, v in user_input.items() if v not in (None, "", [])}
                 )
                 return await self.async_step_pricing()
 
@@ -190,6 +196,9 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Optional(CONF_GRID_POWER_ENTITY): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(CONF_FORECAST_SOLAR_ENTITIES): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor", multiple=True)
                     ),
                 }
             ),
@@ -327,6 +336,11 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                 if entity_id and self.hass.states.get(entity_id) is None:
                     errors[key] = "entity_not_found"
 
+            for eid in (user_input.get(CONF_FORECAST_SOLAR_ENTITIES) or []):
+                if self.hass.states.get(eid) is None:
+                    errors[CONF_FORECAST_SOLAR_ENTITIES] = "entity_not_found"
+                    break
+
             if not errors:
                 new_data = {**self.config_entry.data}
                 new_options = {**self.config_entry.options}
@@ -347,6 +361,10 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                     val = user_input.get(key)
                     if val not in (None, ""):
                         new_data[key] = val
+
+                new_data[CONF_FORECAST_SOLAR_ENTITIES] = (
+                    user_input.get(CONF_FORECAST_SOLAR_ENTITIES) or []
+                )
 
                 new_options[CONF_MIN_CURRENT] = float(
                     user_input.get(CONF_MIN_CURRENT, DEFAULT_MIN_CURRENT)
@@ -459,6 +477,12 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         default=data.get(CONF_EV_SOC_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain=["sensor", "number"])
+                    ),
+                    vol.Optional(
+                        CONF_FORECAST_SOLAR_ENTITIES,
+                        default=data.get(CONF_FORECAST_SOLAR_ENTITIES, []),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor", multiple=True)
                     ),
                 }
             ),

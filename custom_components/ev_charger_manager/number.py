@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.const import UnitOfElectricCurrent
+from homeassistant.const import UnitOfElectricCurrent, UnitOfPower
 
 from .entity import EVChargerManagerEntity
 
@@ -24,14 +24,15 @@ async def async_setup_entry(
 ) -> None:
     """Set up EV Charger Manager number entities."""
     coordinator = entry.runtime_data.coordinator
-    async_add_entities(
-        [
-            EVChargerMinCurrentNumber(coordinator),
-            EVChargerMaxCurrentNumber(coordinator),
-            EVChargerPriceAwarenessNumber(coordinator),
-            EVChargerDeadbandNumber(coordinator),
-        ]
-    )
+    entities: list[NumberEntity] = [
+        EVChargerMinCurrentNumber(coordinator),
+        EVChargerMaxCurrentNumber(coordinator),
+        EVChargerPriceAwarenessNumber(coordinator),
+        EVChargerDeadbandNumber(coordinator),
+    ]
+    if coordinator.forecast_solar_entities:
+        entities.append(EVChargerBaseLoadNumber(coordinator))
+    async_add_entities(entities)
 
 
 class EVChargerMinCurrentNumber(EVChargerManagerEntity, NumberEntity):
@@ -125,3 +126,24 @@ class EVChargerDeadbandNumber(EVChargerManagerEntity, NumberEntity):
         await self.coordinator.async_request_refresh()
 
 
+class EVChargerBaseLoadNumber(EVChargerManagerEntity, NumberEntity):
+    """Household base load deducted from solar forecast to determine available charging power."""
+
+    _attr_icon = "mdi:home-lightning-bolt"
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 5000.0
+    _attr_native_step = 50.0
+    _attr_mode = NumberMode.BOX
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_translation_key = "base_load_w"
+
+    def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        super().__init__(coordinator, unique_id_suffix="base_load_w")
+
+    @property
+    def native_value(self) -> float:
+        return float(self.coordinator.base_load_w)
+
+    async def async_set_native_value(self, value: float) -> None:
+        self.coordinator.base_load_w = round(float(value) / 50) * 50
+        await self.coordinator.async_request_refresh()

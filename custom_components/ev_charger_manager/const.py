@@ -22,6 +22,8 @@ CONF_NORDPOOL_ENTITY = "nordpool_entity"
 CONF_EV_BATTERY_CAPACITY_ENTITY = "ev_battery_capacity_entity"
 CONF_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
 CONF_EV_SOC_ENTITY = "ev_soc_entity"
+CONF_FORECAST_SOLAR_ENTITIES = "forecast_solar_entities"
+CONF_BASE_LOAD_W = "base_load_w"
 
 # Options keys (stored in entry.options, changeable at runtime)
 CONF_CHARGE_MODE = "charge_mode"
@@ -37,6 +39,7 @@ DEFAULT_VOLTAGE = 230
 DEFAULT_CHARGE_HOURS = 4
 DEFAULT_PRICE_AWARENESS = 0.5
 DEFAULT_CHARGE_DEADBAND = 1.0
+DEFAULT_BASE_LOAD_W = 500
 
 # Update interval in minutes
 UPDATE_INTERVAL_MINUTES = 5

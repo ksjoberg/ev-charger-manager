@@ -36,3 +36,4 @@ class EVChargerData:
     grid_export_kw: float | None = None
     ev_kwh_needed: float | None = None
     charge_hours_needed: float | None = None
+    hourly_solar_forecast: list[float] = field(default_factory=list)

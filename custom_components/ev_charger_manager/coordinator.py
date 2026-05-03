@@ -16,9 +16,11 @@ from .charge_strategy import (
     strategy_solar_price_blend,
 )
 from .const import (
+    CONF_BASE_LOAD_W,
     CONF_CHARGE_DEADBAND,
     CONF_CHARGE_MODE,
     CONF_CHARGER_CURRENT_ENTITY,
+    CONF_FORECAST_SOLAR_ENTITIES,
     CONF_GRID_POWER_ENTITY,
     CONF_PRICE_AWARENESS,
     CONF_PV_POWER_ENTITY,
@@ -32,6 +34,7 @@ from .const import (
     CONF_PV_PEAK_POWER,
     CONF_VOLTAGE,
     CONF_WEATHER_ENTITY,
+    DEFAULT_BASE_LOAD_W,
     DEFAULT_CHARGE_DEADBAND,
     DEFAULT_CHARGE_HOURS,
     DEFAULT_CHARGE_MODE,
@@ -47,6 +50,8 @@ from .const import (
     UPDATE_INTERVAL_MINUTES,
     ChargeMode,
 )
+from homeassistant.util import dt as dt_util
+
 from .data import EVChargerData
 from .solar import estimate_solar_power_kw
 
@@ -162,6 +167,21 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
     def ev_soc_entity(self) -> str | None:
         return self.config_entry.data.get(CONF_EV_SOC_ENTITY)
 
+    @property
+    def forecast_solar_entities(self) -> list[str]:
+        return list(self.config_entry.data.get(CONF_FORECAST_SOLAR_ENTITIES) or [])
+
+    @property
+    def base_load_w(self) -> float:
+        return float(self.config_entry.options.get(CONF_BASE_LOAD_W, DEFAULT_BASE_LOAD_W))
+
+    @base_load_w.setter
+    def base_load_w(self, value: float) -> None:
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={**self.config_entry.options, CONF_BASE_LOAD_W: value},
+        )
+
     # ------------------------------------------------------------------
     # Options (changeable at runtime via select/number entities)
     # ------------------------------------------------------------------
@@ -188,7 +208,12 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         """Read HA states, compute a charge decision, and apply it."""
         result = EVChargerData(mode=self.current_mode.value)
 
-        # --- Solar power: real sensor takes priority over weather estimate ---
+        # --- Forecast.Solar: aggregate hourly forecast from configured entities ---
+        result.hourly_solar_forecast = _extract_solar_forecast(
+            self.hass, self.forecast_solar_entities, self.base_load_w
+        )
+
+        # --- Solar power: real sensor > forecast[0] > weather estimate ---
         if self.pv_power_entity:
             pv_state = self.hass.states.get(self.pv_power_entity)
             if pv_state and pv_state.state not in ("unavailable", "unknown"):
@@ -202,6 +227,8 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                         self.pv_power_entity,
                         pv_state.state,
                     )
+        elif result.hourly_solar_forecast:
+            result.solar_power_kw = result.hourly_solar_forecast[0]
         elif self.weather_entity and self.pv_peak_power > 0:
             weather_state = self.hass.states.get(self.weather_entity)
             if weather_state and weather_state.state not in ("unavailable", "unknown"):
@@ -229,6 +256,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
         # --- Nordpool / spot price ---
         slots_per_hour = 1
+        future_prices: list[float] = []
         if self.nordpool_entity:
             np_state = self.hass.states.get(self.nordpool_entity)
             if np_state and np_state.state not in ("unavailable", "unknown"):
@@ -248,6 +276,9 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 # Detect sub-hourly granularity (e.g. 96 entries/day = 15-min slots)
                 if len(today_prices) >= 20:
                     slots_per_hour = max(1, round(len(today_prices) / 24))
+                # Slice to current hour so index 0 = now (aligns with solar forecast)
+                current_slot = dt_util.now().hour * slots_per_hour
+                future_prices = result.hourly_prices[current_slot:]
 
         # --- EV state of charge / kWh needed ---
         result.ev_kwh_needed = self._compute_ev_kwh_needed()
@@ -293,10 +324,11 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 voltage=self.voltage,
                 price_awareness=self.price_awareness,
                 current_price=result.current_price or 0.0,
-                hourly_prices=result.hourly_prices,
+                hourly_prices=future_prices or result.hourly_prices,
                 charge_hours_needed=charge_slots,
                 grid_export_kw=result.grid_export_kw,
                 ev_charging_kw=ev_charging_kw,
+                hourly_solar_forecast=result.hourly_solar_forecast or None,
             )
 
         else:  # MINIMIZE_COST
@@ -304,10 +336,13 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             charge_slots = max(1, round(hours * slots_per_hour))
             decision = strategy_minimize_cost(
                 current_price=result.current_price or 0.0,
-                hourly_prices=result.hourly_prices,
+                hourly_prices=future_prices or result.hourly_prices,
                 min_current=self.min_current,
                 max_current=self.max_current,
                 charge_hours_needed=charge_slots,
+                phases=self.phases,
+                voltage=self.voltage,
+                hourly_solar_forecast=result.hourly_solar_forecast or None,
             )
 
         # Round to whole amperes; apply dead-band to suppress minor fluctuations
@@ -380,6 +415,44 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 current,
                 exc,
             )
+
+
+def _extract_solar_forecast(
+    hass: "HomeAssistant",
+    entity_ids: list[str],
+    base_load_w: float,
+) -> list[float]:
+    """Aggregate Forecast.Solar entities into an hourly available-kW list.
+
+    Returns a list indexed by hour offset from the current hour (0 = now).
+    Each value is the available surplus kW after deducting base_load_w.
+    """
+    now = dt_util.now().replace(minute=0, second=0, microsecond=0)
+    aggregated: dict[int, float] = {}
+    for entity_id in entity_ids:
+        state = hass.states.get(entity_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            continue
+        watts_dict = state.attributes.get("watts")
+        if not isinstance(watts_dict, dict):
+            continue
+        for ts_str, watts in watts_dict.items():
+            dt = dt_util.parse_datetime(ts_str)
+            if dt is None:
+                continue
+            dt_hour = dt.replace(minute=0, second=0, microsecond=0)
+            offset = round((dt_hour - now).total_seconds() / 3600)
+            if 0 <= offset < 48:
+                try:
+                    aggregated[offset] = aggregated.get(offset, 0.0) + float(watts)
+                except (TypeError, ValueError):
+                    pass
+    if not aggregated:
+        return []
+    return [
+        round(max(0.0, (aggregated.get(i, 0.0) - base_load_w) / 1000.0), 3)
+        for i in range(max(aggregated) + 1)
+    ]
 
 
 def _extract_price_list(

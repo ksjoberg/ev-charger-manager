@@ -26,13 +26,15 @@
           "pv_peak_power": "PV system peak power",
           "weather_entity": "Weather entity",
           "pv_power_entity": "PV power sensor (optional)",
-          "grid_power_entity": "Grid power sensor (optional)"
+          "grid_power_entity": "Grid power sensor (optional)",
+          "forecast_solar_entities": "Forecast.Solar entities (optional)"
         },
         "data_description": {
           "pv_peak_power": "Nameplate capacity of your PV system in kWp. Set to 0 to disable solar estimation.",
           "weather_entity": "Used to estimate cloud attenuation of solar output.",
           "pv_power_entity": "Sensor reporting actual PV output in W or kW. When provided, replaces the weather-based estimate.",
-          "grid_power_entity": "Sensor reporting grid power (positive = export to grid). When provided, the measured solar export is used instead of the estimate."
+          "grid_power_entity": "Sensor reporting grid power (positive = export to grid). When provided, the measured solar export is used instead of the estimate.",
+          "forecast_solar_entities": "One or more Forecast.Solar sensors covering your PV arrays. Their hourly watts forecasts are summed and used to build a solar charging plan."
         }
       },
       "pricing": {
@@ -83,6 +85,7 @@
           "pv_power_entity": "PV power sensor",
           "grid_power_entity": "Grid power sensor",
           "nordpool_entity": "Nordpool / spot price sensor",
+          "forecast_solar_entities": "Forecast.Solar entities",
           "ev_battery_capacity_entity": "Battery capacity entity",
           "ev_target_soc_entity": "Charge target level entity",
           "ev_soc_entity": "Current SoC entity"
@@ -126,6 +129,9 @@
       },
       "grid_export": {
         "name": "Grid export power"
+      },
+      "solar_forecast_now": {
+        "name": "Solar forecast (current hour)"
       }
     },
     "number": {
@@ -140,6 +146,9 @@
       },
       "charge_deadband": {
         "name": "Current change dead-band"
+      },
+      "base_load_w": {
+        "name": "Household base load"
       }
     }
   },
