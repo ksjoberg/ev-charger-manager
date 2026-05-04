@@ -41,7 +41,7 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for EV Charger Manager.
 
     Step 1 (user)    – charger entity, min/max current, phases, voltage
-    Step 2 (solar)   – Forecast.Solar entities, optional real-time PV and grid sensors
+    Step 2 (solar)   – Open-Meteo Solar Forecast entities, optional real-time PV and grid sensors
     Step 3 (pricing) – Nordpool import and export price entities
     Step 4 (ev)      – EV battery capacity, target SoC, current SoC entities
     """
@@ -173,7 +173,7 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                         selector.EntitySelectorConfig(
                             domain="sensor",
                             multiple=True,
-                            integration="forecast_solar",
+                            integration="open_meteo_solar_forecast",
                         )
                     ),
                     vol.Optional(CONF_PV_POWER_ENTITY): selector.EntitySelector(
@@ -420,7 +420,7 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         selector.EntitySelectorConfig(
                             domain="sensor",
                             multiple=True,
-                            integration="forecast_solar",
+                            integration="open_meteo_solar_forecast",
                         )
                     ),
                     vol.Optional(

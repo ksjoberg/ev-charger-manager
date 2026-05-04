@@ -19,7 +19,7 @@ def _parse_ts(ts: Any) -> datetime | None:
 
 
 def read_solar_forecast(attributes: dict[str, Any]) -> dict[datetime, float]:
-    """Extract a {datetime: kW} forecast from a Forecast.Solar sensor's attributes.
+    """Extract a {datetime: kW} forecast from an Open-Meteo Solar Forecast sensor's attributes.
 
     Tries the 'watts' key (W values) then 'wh_hours' (Wh/h values).
     Returns an empty dict if neither key is present.

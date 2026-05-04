@@ -21,14 +21,14 @@
       },
       "solar": {
         "title": "Solar / PV Setup",
-        "description": "Connect your Forecast.Solar sensors and optional real-time PV or grid power sensors.",
+        "description": "Connect your Open-Meteo Solar Forecast sensors and optional real-time PV or grid power sensors.",
         "data": {
-          "forecast_solar_entities": "Forecast.Solar entities (optional)",
+          "forecast_solar_entities": "Open-Meteo Solar Forecast entities (optional)",
           "pv_power_entity": "PV power sensor (optional)",
           "grid_power_entity": "Grid power sensor (optional)"
         },
         "data_description": {
-          "forecast_solar_entities": "One or more Forecast.Solar sensors covering your PV arrays. Their hourly watt forecasts are summed to build a solar charging plan.",
+          "forecast_solar_entities": "One or more Open-Meteo Solar Forecast sensors covering your PV arrays. Their watt forecasts are summed to build a solar charging plan.",
           "pv_power_entity": "Sensor reporting actual PV output in W or kW. When provided, used for real-time solar-excess decisions.",
           "grid_power_entity": "Sensor reporting grid power (positive = export to grid). When provided, the measured solar export is used instead of the estimate."
         }
@@ -78,7 +78,7 @@
           "max_current": "Maximum charge current",
           "phases": "Number of phases",
           "voltage": "Phase voltage",
-          "forecast_solar_entities": "Forecast.Solar entities",
+          "forecast_solar_entities": "Open-Meteo Solar Forecast entities",
           "pv_power_entity": "PV power sensor",
           "grid_power_entity": "Grid power sensor",
           "nordpool_import_entity": "Import price sensor",

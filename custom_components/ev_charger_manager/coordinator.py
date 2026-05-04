@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -202,12 +202,12 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         result = EVChargerData(mode=self.current_mode.value)
         now = dt_util.now()
 
-        # --- Forecast.Solar: aggregate hourly forecast from configured entities ---
+        # --- Open-Meteo Solar Forecast: aggregate hourly forecast from configured entities ---
         result.hourly_solar_forecast = _extract_solar_forecast(
             self.hass, self.forecast_solar_entities, self.base_load_w
         )
 
-        # --- Solar forecast kW for current moment (from Forecast.Solar raw data) ---
+        # --- Solar forecast kW for current moment (from Open-Meteo Solar Forecast raw data) ---
         if self.forecast_solar_entities:
             combined_forecast: dict = {}
             for entity_id in self.forecast_solar_entities:
@@ -511,13 +511,19 @@ def _extract_solar_forecast(
     entity_ids: list[str],
     base_load_w: float,
 ) -> list[float]:
-    """Aggregate Forecast.Solar entities into an hourly available-kW list.
+    """Aggregate Open-Meteo Solar Forecast entities into an hourly available-kW list.
 
     Returns a list indexed by hour offset from the current hour (0 = now).
     Each value is the available surplus kW after deducting base_load_w.
+    
+    Open-Meteo Solar Forecast provides 15-minute interval forecasts. This function:
+    1. Sums watts across all entities for each timestamp
+    2. Averages values within each hour to get hourly representative values
     """
     now = dt_util.now().replace(minute=0, second=0, microsecond=0)
-    aggregated: dict[int, float] = {}
+    
+    # First pass: aggregate watts from all entities by timestamp
+    timestamp_watts: dict[datetime, float] = {}
     for entity_id in entity_ids:
         state = hass.states.get(entity_id)
         if state is None or state.state in ("unavailable", "unknown"):
@@ -529,19 +535,39 @@ def _extract_solar_forecast(
             dt = dt_util.parse_datetime(ts_str)
             if dt is None:
                 continue
-            dt_hour = dt.replace(minute=0, second=0, microsecond=0)
-            offset = round((dt_hour - now).total_seconds() / 3600)
-            if 0 <= offset < 48:
-                try:
-                    aggregated[offset] = aggregated.get(offset, 0.0) + float(watts)
-                except (TypeError, ValueError):
-                    pass
-    if not aggregated:
+            try:
+                timestamp_watts[dt] = timestamp_watts.get(dt, 0.0) + float(watts)
+            except (TypeError, ValueError):
+                pass
+    
+    if not timestamp_watts:
         return []
-    return [
-        round(max(0.0, (aggregated.get(i, 0.0) - base_load_w) / 1000.0), 3)
-        for i in range(max(aggregated) + 1)
-    ]
+    
+    # Second pass: group by hour and average values within each hour
+    hourly_values: dict[int, list[float]] = {}
+    for dt, watts in timestamp_watts.items():
+        dt_hour = dt.replace(minute=0, second=0, microsecond=0)
+        offset = round((dt_hour - now).total_seconds() / 3600)
+        if 0 <= offset < 48:
+            if offset not in hourly_values:
+                hourly_values[offset] = []
+            hourly_values[offset].append(watts)
+    
+    if not hourly_values:
+        return []
+    
+    # Build the final list by averaging values in each hour and subtracting base load
+    max_offset = max(hourly_values.keys())
+    result = []
+    for i in range(max_offset + 1):
+        values = hourly_values.get(i, [])
+        if values:
+            avg_watts = sum(values) / len(values)
+            available_kw = max(0.0, (avg_watts - base_load_w) / 1000.0)
+            result.append(round(available_kw, 3))
+        else:
+            result.append(0.0)
+    return result
 
 
 def _extract_price_list(
