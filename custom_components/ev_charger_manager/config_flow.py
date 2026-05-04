@@ -16,14 +16,13 @@ from .const import (
     CONF_EV_TARGET_SOC_ENTITY,
     CONF_FORECAST_SOLAR_ENTITIES,
     CONF_GRID_POWER_ENTITY,
+    CONF_NORDPOOL_EXPORT_ENTITY,
+    CONF_NORDPOOL_IMPORT_ENTITY,
     CONF_PV_POWER_ENTITY,
     CONF_MAX_CURRENT,
     CONF_MIN_CURRENT,
-    CONF_NORDPOOL_ENTITY,
     CONF_PHASES,
-    CONF_PV_PEAK_POWER,
     CONF_VOLTAGE,
-    CONF_WEATHER_ENTITY,
     DEFAULT_CHARGE_MODE,
     DEFAULT_MAX_CURRENT,
     DEFAULT_MIN_CURRENT,
@@ -42,8 +41,8 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for EV Charger Manager.
 
     Step 1 (user)    – charger entity, min/max current, phases, voltage
-    Step 2 (solar)   – PV peak power, weather entity, optional grid sensor
-    Step 3 (pricing) – Nordpool price entity
+    Step 2 (solar)   – Forecast.Solar entities, optional real-time PV and grid sensors
+    Step 3 (pricing) – Nordpool import and export price entities
     Step 4 (ev)      – EV battery capacity, target SoC, current SoC entities
     """
 
@@ -143,12 +142,6 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            weather_entity = user_input.get(CONF_WEATHER_ENTITY)
-            if weather_entity:
-                state = self.hass.states.get(weather_entity)
-                if state is None:
-                    errors[CONF_WEATHER_ENTITY] = "entity_not_found"
-
             pv_entity = user_input.get(CONF_PV_POWER_ENTITY)
             if pv_entity:
                 state = self.hass.states.get(pv_entity)
@@ -176,29 +169,18 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="solar",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(
-                        CONF_PV_PEAK_POWER,
-                        default=(self._data or {}).get(CONF_PV_PEAK_POWER, 0.0),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0,
-                            max=100,
-                            step=0.1,
-                            unit_of_measurement="kW",
-                            mode=selector.NumberSelectorMode.BOX,
+                    vol.Optional(CONF_FORECAST_SOLAR_ENTITIES): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor",
+                            multiple=True,
+                            integration="forecast_solar",
                         )
-                    ),
-                    vol.Optional(CONF_WEATHER_ENTITY): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="weather")
                     ),
                     vol.Optional(CONF_PV_POWER_ENTITY): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Optional(CONF_GRID_POWER_ENTITY): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
-                    ),
-                    vol.Optional(CONF_FORECAST_SOLAR_ENTITIES): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="sensor", multiple=True)
                     ),
                 }
             ),
@@ -215,22 +197,27 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            nordpool_entity = user_input.get(CONF_NORDPOOL_ENTITY)
-            if nordpool_entity:
-                state = self.hass.states.get(nordpool_entity)
-                if state is None:
-                    errors[CONF_NORDPOOL_ENTITY] = "entity_not_found"
+            for key in (CONF_NORDPOOL_IMPORT_ENTITY, CONF_NORDPOOL_EXPORT_ENTITY):
+                entity_id = user_input.get(key)
+                if entity_id:
+                    state = self.hass.states.get(entity_id)
+                    if state is None:
+                        errors[key] = "entity_not_found"
 
             if not errors:
-                if nordpool_entity:
-                    self._data[CONF_NORDPOOL_ENTITY] = nordpool_entity
+                self._data.update(
+                    {k: v for k, v in user_input.items() if v not in (None, "")}
+                )
                 return await self.async_step_ev()
 
         return self.async_show_form(
             step_id="pricing",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(CONF_NORDPOOL_ENTITY): selector.EntitySelector(
+                    vol.Optional(CONF_NORDPOOL_IMPORT_ENTITY): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(CONF_NORDPOOL_EXPORT_ENTITY): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
                 }
@@ -324,10 +311,10 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
             # Validate entities that were provided
             for key in (
                 CONF_CHARGER_CURRENT_ENTITY,
-                CONF_WEATHER_ENTITY,
                 CONF_PV_POWER_ENTITY,
                 CONF_GRID_POWER_ENTITY,
-                CONF_NORDPOOL_ENTITY,
+                CONF_NORDPOOL_IMPORT_ENTITY,
+                CONF_NORDPOOL_EXPORT_ENTITY,
                 CONF_EV_BATTERY_CAPACITY_ENTITY,
                 CONF_EV_TARGET_SOC_ENTITY,
                 CONF_EV_SOC_ENTITY,
@@ -349,11 +336,10 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_CHARGER_CURRENT_ENTITY,
                     CONF_PHASES,
                     CONF_VOLTAGE,
-                    CONF_PV_PEAK_POWER,
-                    CONF_WEATHER_ENTITY,
                     CONF_PV_POWER_ENTITY,
                     CONF_GRID_POWER_ENTITY,
-                    CONF_NORDPOOL_ENTITY,
+                    CONF_NORDPOOL_IMPORT_ENTITY,
+                    CONF_NORDPOOL_EXPORT_ENTITY,
                     CONF_EV_BATTERY_CAPACITY_ENTITY,
                     CONF_EV_TARGET_SOC_ENTITY,
                     CONF_EV_SOC_ENTITY,
@@ -428,19 +414,14 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         )
                     ),
                     vol.Optional(
-                        CONF_PV_PEAK_POWER,
-                        default=data.get(CONF_PV_PEAK_POWER, 0.0),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0, max=100, step=0.1, unit_of_measurement="kW",
-                            mode=selector.NumberSelectorMode.BOX,
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_WEATHER_ENTITY,
-                        default=data.get(CONF_WEATHER_ENTITY, ""),
+                        CONF_FORECAST_SOLAR_ENTITIES,
+                        default=data.get(CONF_FORECAST_SOLAR_ENTITIES, []),
                     ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="weather")
+                        selector.EntitySelectorConfig(
+                            domain="sensor",
+                            multiple=True,
+                            integration="forecast_solar",
+                        )
                     ),
                     vol.Optional(
                         CONF_PV_POWER_ENTITY,
@@ -455,8 +436,14 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Optional(
-                        CONF_NORDPOOL_ENTITY,
-                        default=data.get(CONF_NORDPOOL_ENTITY, ""),
+                        CONF_NORDPOOL_IMPORT_ENTITY,
+                        default=data.get(CONF_NORDPOOL_IMPORT_ENTITY, ""),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(
+                        CONF_NORDPOOL_EXPORT_ENTITY,
+                        default=data.get(CONF_NORDPOOL_EXPORT_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
@@ -477,12 +464,6 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         default=data.get(CONF_EV_SOC_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain=["sensor", "number"])
-                    ),
-                    vol.Optional(
-                        CONF_FORECAST_SOLAR_ENTITIES,
-                        default=data.get(CONF_FORECAST_SOLAR_ENTITIES, []),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="sensor", multiple=True)
                     ),
                 }
             ),

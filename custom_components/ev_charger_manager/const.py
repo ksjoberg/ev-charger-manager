@@ -14,11 +14,10 @@ CONF_MIN_CURRENT = "min_current"
 CONF_MAX_CURRENT = "max_current"
 CONF_PHASES = "phases"
 CONF_VOLTAGE = "voltage"
-CONF_PV_PEAK_POWER = "pv_peak_power"
-CONF_WEATHER_ENTITY = "weather_entity"
 CONF_GRID_POWER_ENTITY = "grid_power_entity"
 CONF_PV_POWER_ENTITY = "pv_power_entity"
-CONF_NORDPOOL_ENTITY = "nordpool_entity"
+CONF_NORDPOOL_IMPORT_ENTITY = "nordpool_import_entity"
+CONF_NORDPOOL_EXPORT_ENTITY = "nordpool_export_entity"
 CONF_EV_BATTERY_CAPACITY_ENTITY = "ev_battery_capacity_entity"
 CONF_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
 CONF_EV_SOC_ENTITY = "ev_soc_entity"
@@ -54,28 +53,6 @@ class ChargeMode(StrEnum):
 
 CHARGE_MODES = [ChargeMode.ASAP, ChargeMode.SOLAR_EXCESS, ChargeMode.MINIMIZE_COST, ChargeMode.SOLAR_PRICE_BLEND]
 DEFAULT_CHARGE_MODE = ChargeMode.ASAP
-
-# Weather condition → solar attenuation factor (0.0–1.0)
-WEATHER_ATTENUATION: dict[str, float] = {
-    "sunny": 1.0,
-    "clear": 1.0,
-    "clear-night": 0.0,
-    "night": 0.0,
-    "partlycloudy": 0.55,
-    "cloudy": 0.20,
-    "fog": 0.15,
-    "rainy": 0.10,
-    "pouring": 0.05,
-    "snowy-rainy": 0.10,
-    "snowy": 0.15,
-    "hail": 0.05,
-    "lightning": 0.05,
-    "lightning-rainy": 0.05,
-    "windy": 0.90,
-    "windy-variant": 0.75,
-    "exceptional": 0.50,
-}
-WEATHER_ATTENUATION_DEFAULT = 0.50
 
 # Attribute names tried when reading hourly prices from Nordpool-style sensors
 NORDPOOL_PRICE_ATTRS = ("today", "raw_today", "prices_today", "prices")

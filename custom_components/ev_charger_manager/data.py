@@ -28,8 +28,10 @@ class EVChargerData:
     """Snapshot of all computed values produced by a coordinator update cycle."""
 
     mode: str = ""
-    solar_power_kw: float = 0.0
-    current_price: float | None = None
+    solar_power_kw: float | None = None
+    solar_forecast_kw: float | None = None
+    current_import_price: float | None = None
+    current_export_price: float | None = None
     hourly_prices: list[float] = field(default_factory=list)
     applied_current: float = 0.0
     charge_reason: str = ""
@@ -37,3 +39,4 @@ class EVChargerData:
     ev_kwh_needed: float | None = None
     charge_hours_needed: float | None = None
     hourly_solar_forecast: list[float] = field(default_factory=list)
+    charge_plan: str = ""

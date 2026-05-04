@@ -5,8 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .charge_strategy import (
     ChargeDecision,
@@ -22,6 +21,8 @@ from .const import (
     CONF_CHARGER_CURRENT_ENTITY,
     CONF_FORECAST_SOLAR_ENTITIES,
     CONF_GRID_POWER_ENTITY,
+    CONF_NORDPOOL_EXPORT_ENTITY,
+    CONF_NORDPOOL_IMPORT_ENTITY,
     CONF_PRICE_AWARENESS,
     CONF_PV_POWER_ENTITY,
     CONF_MAX_CURRENT,
@@ -29,11 +30,8 @@ from .const import (
     CONF_EV_BATTERY_CAPACITY_ENTITY,
     CONF_EV_SOC_ENTITY,
     CONF_EV_TARGET_SOC_ENTITY,
-    CONF_NORDPOOL_ENTITY,
     CONF_PHASES,
-    CONF_PV_PEAK_POWER,
     CONF_VOLTAGE,
-    CONF_WEATHER_ENTITY,
     DEFAULT_BASE_LOAD_W,
     DEFAULT_CHARGE_DEADBAND,
     DEFAULT_CHARGE_HOURS,
@@ -53,7 +51,7 @@ from .const import (
 from homeassistant.util import dt as dt_util
 
 from .data import EVChargerData
-from .solar import estimate_solar_power_kw
+from .solar import read_solar_forecast, solar_forecast_at
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -136,14 +134,6 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         return float(self.config_entry.data.get(CONF_VOLTAGE, DEFAULT_VOLTAGE))
 
     @property
-    def pv_peak_power(self) -> float:
-        return float(self.config_entry.data.get(CONF_PV_PEAK_POWER, 0.0))
-
-    @property
-    def weather_entity(self) -> str | None:
-        return self.config_entry.data.get(CONF_WEATHER_ENTITY)
-
-    @property
     def grid_power_entity(self) -> str | None:
         return self.config_entry.data.get(CONF_GRID_POWER_ENTITY)
 
@@ -152,8 +142,12 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         return self.config_entry.data.get(CONF_PV_POWER_ENTITY)
 
     @property
-    def nordpool_entity(self) -> str | None:
-        return self.config_entry.data.get(CONF_NORDPOOL_ENTITY)
+    def nordpool_import_entity(self) -> str | None:
+        return self.config_entry.data.get(CONF_NORDPOOL_IMPORT_ENTITY)
+
+    @property
+    def nordpool_export_entity(self) -> str | None:
+        return self.config_entry.data.get(CONF_NORDPOOL_EXPORT_ENTITY)
 
     @property
     def ev_battery_capacity_entity(self) -> str | None:
@@ -199,7 +193,6 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             options={**self.config_entry.options, CONF_CHARGE_MODE: mode.value},
         )
 
-
     # ------------------------------------------------------------------
     # Main update logic
     # ------------------------------------------------------------------
@@ -207,13 +200,29 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
     async def _async_update_data(self) -> EVChargerData:
         """Read HA states, compute a charge decision, and apply it."""
         result = EVChargerData(mode=self.current_mode.value)
+        now = dt_util.now()
 
         # --- Forecast.Solar: aggregate hourly forecast from configured entities ---
         result.hourly_solar_forecast = _extract_solar_forecast(
             self.hass, self.forecast_solar_entities, self.base_load_w
         )
 
-        # --- Solar power: real sensor > forecast[0] > weather estimate ---
+        # --- Solar forecast kW for current moment (from Forecast.Solar raw data) ---
+        if self.forecast_solar_entities:
+            combined_forecast: dict = {}
+            for entity_id in self.forecast_solar_entities:
+                state = self.hass.states.get(entity_id)
+                if state is None or state.state in ("unavailable", "unknown"):
+                    continue
+                for dt, kw in read_solar_forecast(dict(state.attributes)).items():
+                    combined_forecast[dt] = combined_forecast.get(dt, 0.0) + kw
+            if combined_forecast:
+                raw_kw = solar_forecast_at(combined_forecast, now)
+                if raw_kw is not None:
+                    base_kw = self.base_load_w / 1000.0
+                    result.solar_forecast_kw = round(max(0.0, raw_kw - base_kw), 3)
+
+        # --- Solar power: real PV sensor only (None when no sensor configured) ---
         if self.pv_power_entity:
             pv_state = self.hass.states.get(self.pv_power_entity)
             if pv_state and pv_state.state not in ("unavailable", "unknown"):
@@ -227,17 +236,13 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                         self.pv_power_entity,
                         pv_state.state,
                     )
-        elif result.hourly_solar_forecast:
-            result.solar_power_kw = result.hourly_solar_forecast[0]
-        elif self.weather_entity and self.pv_peak_power > 0:
-            weather_state = self.hass.states.get(self.weather_entity)
-            if weather_state and weather_state.state not in ("unavailable", "unknown"):
-                result.solar_power_kw = estimate_solar_power_kw(
-                    peak_power_kw=self.pv_peak_power,
-                    latitude=self.hass.config.latitude,
-                    longitude=self.hass.config.longitude,
-                    weather_condition=weather_state.state,
-                )
+
+        # effective_solar_kw: actual measurement when available, else forecast
+        effective_solar_kw = (
+            result.solar_power_kw
+            if result.solar_power_kw is not None
+            else (result.hourly_solar_forecast[0] if result.hourly_solar_forecast else 0.0)
+        )
 
         # --- Grid power (positive = export available for EV) ---
         if self.grid_power_entity:
@@ -254,18 +259,25 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                         gp_state.state,
                     )
 
-        # --- Nordpool / spot price ---
+        # Available solar excess: grid export if measured, else effective solar
+        solar_excess_kw = (
+            result.grid_export_kw if result.grid_export_kw is not None else effective_solar_kw
+        )
+
+        # --- Nordpool import price ---
         slots_per_hour = 1
+        today_prices: list[float] = []
+        tomorrow_prices: list[float] = []
         future_prices: list[float] = []
-        if self.nordpool_entity:
-            np_state = self.hass.states.get(self.nordpool_entity)
+        if self.nordpool_import_entity:
+            np_state = self.hass.states.get(self.nordpool_import_entity)
             if np_state and np_state.state not in ("unavailable", "unknown"):
                 try:
-                    result.current_price = float(np_state.state)
+                    result.current_import_price = float(np_state.state)
                 except ValueError:
                     LOGGER.warning(
-                        "Could not parse Nordpool price from %s: %s",
-                        self.nordpool_entity,
+                        "Could not parse import price from %s: %s",
+                        self.nordpool_import_entity,
                         np_state.state,
                     )
 
@@ -273,12 +285,23 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 today_prices = _extract_price_list(attrs, NORDPOOL_PRICE_ATTRS)
                 tomorrow_prices = _extract_price_list(attrs, NORDPOOL_TOMORROW_ATTRS)
                 result.hourly_prices = today_prices + tomorrow_prices
-                # Detect sub-hourly granularity (e.g. 96 entries/day = 15-min slots)
                 if len(today_prices) >= 20:
                     slots_per_hour = max(1, round(len(today_prices) / 24))
-                # Slice to current hour so index 0 = now (aligns with solar forecast)
-                current_slot = dt_util.now().hour * slots_per_hour
+                current_slot = now.hour * slots_per_hour
                 future_prices = result.hourly_prices[current_slot:]
+
+        # --- Nordpool export price ---
+        if self.nordpool_export_entity:
+            np_state = self.hass.states.get(self.nordpool_export_entity)
+            if np_state and np_state.state not in ("unavailable", "unknown"):
+                try:
+                    result.current_export_price = float(np_state.state)
+                except ValueError:
+                    LOGGER.warning(
+                        "Could not parse export price from %s: %s",
+                        self.nordpool_export_entity,
+                        np_state.state,
+                    )
 
         # --- EV state of charge / kWh needed ---
         result.ev_kwh_needed = self._compute_ev_kwh_needed()
@@ -302,7 +325,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             prev_current = self.data.applied_current if self.data else 0.0
             ev_charging_kw = (prev_current * self.phases * self.voltage) / 1000.0
             decision = strategy_solar_excess(
-                solar_power_kw=result.solar_power_kw,
+                solar_power_kw=effective_solar_kw,
                 min_current=self.min_current,
                 max_current=self.max_current,
                 phases=self.phases,
@@ -317,13 +340,13 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             hours = result.charge_hours_needed if result.charge_hours_needed is not None else DEFAULT_CHARGE_HOURS
             charge_slots = max(1, round(hours * slots_per_hour))
             decision = strategy_solar_price_blend(
-                solar_power_kw=result.solar_power_kw,
+                solar_power_kw=effective_solar_kw,
                 min_current=self.min_current,
                 max_current=self.max_current,
                 phases=self.phases,
                 voltage=self.voltage,
                 price_awareness=self.price_awareness,
-                current_price=result.current_price or 0.0,
+                current_price=result.current_import_price or 0.0,
                 hourly_prices=future_prices or result.hourly_prices,
                 charge_hours_needed=charge_slots,
                 grid_export_kw=result.grid_export_kw,
@@ -334,8 +357,10 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         else:  # MINIMIZE_COST
             hours = result.charge_hours_needed if result.charge_hours_needed is not None else DEFAULT_CHARGE_HOURS
             charge_slots = max(1, round(hours * slots_per_hour))
+            min_charging_kw = (self.min_current * self.phases * self.voltage) / 1000.0
+
             decision = strategy_minimize_cost(
-                current_price=result.current_price or 0.0,
+                current_price=result.current_import_price or 0.0,
                 hourly_prices=future_prices or result.hourly_prices,
                 min_current=self.min_current,
                 max_current=self.max_current,
@@ -343,7 +368,30 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 phases=self.phases,
                 voltage=self.voltage,
                 hourly_solar_forecast=result.hourly_solar_forecast or None,
+                solar_excess_kw=solar_excess_kw,
+                export_price=result.current_export_price,
             )
+
+            # Build session plan string for MINIMIZE_COST
+            if today_prices:
+                current_slot_in_today = now.hour * slots_per_hour
+                ep: list[float] = []
+                all_prices = today_prices + tomorrow_prices
+                for i, price in enumerate(all_prices):
+                    fi_hour = (i - current_slot_in_today) // slots_per_hour
+                    solar_kw = (
+                        result.hourly_solar_forecast[fi_hour]
+                        if result.hourly_solar_forecast and 0 <= fi_hour < len(result.hourly_solar_forecast)
+                        else 0.0
+                    )
+                    ep.append(
+                        result.current_export_price
+                        if solar_kw >= min_charging_kw and result.current_export_price is not None
+                        else price
+                    )
+                result.charge_plan = _session_plan(
+                    ep, charge_slots, len(today_prices), current_slot_in_today, slots_per_hour
+                )
 
         # Round to whole amperes; apply dead-band to suppress minor fluctuations
         target_amps = round(decision.target_current)
@@ -397,7 +445,6 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         except ValueError:
             current_value = None
 
-        # Only write if the value actually changed to avoid unnecessary calls
         if current_value is not None and abs(current_value - current) < 0.05:
             return
 
@@ -415,6 +462,48 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 current,
                 exc,
             )
+
+
+def _session_plan(
+    effective_prices: list[float],
+    charge_slots: int,
+    today_slot_count: int,
+    current_slot_index: int,
+    slots_per_hour: int,
+) -> str:
+    """Summarise the charge session plan as a human-readable string.
+
+    effective_prices covers today_prices + tomorrow_prices, with export_price
+    already substituted for solar-covered slots. charge_slots is already scaled
+    for sub-hourly granularity.
+    """
+    if not effective_prices or charge_slots <= 0:
+        return ""
+
+    n = max(1, min(charge_slots, len(effective_prices)))
+    sorted_prices = sorted(effective_prices)
+    threshold = sorted_prices[n - 1]
+
+    future_today: list[int] = []
+    tomorrow_all: list[int] = []
+    for i, p in enumerate(effective_prices):
+        if i < today_slot_count:
+            if i >= current_slot_index and p <= threshold:
+                future_today.append(i)
+        else:
+            if p <= threshold:
+                tomorrow_all.append(i)
+
+    today_hours = len(future_today) / slots_per_hour
+    tomorrow_hours = len(tomorrow_all) / slots_per_hour
+
+    if today_hours <= 0 and tomorrow_hours > 0:
+        return f"Session deferred to tomorrow ({tomorrow_hours:.1f} h planned)"
+    if today_hours > 0 and tomorrow_hours > 0:
+        return f"Today {today_hours:.1f} h + tomorrow {tomorrow_hours:.1f} h"
+    if today_hours > 0:
+        return f"Today {today_hours:.1f} h planned"
+    return "No cheap slots found in price window"
 
 
 def _extract_solar_forecast(
@@ -466,7 +555,6 @@ def _extract_price_list(
         if isinstance(raw, list):
             prices = []
             for item in raw:
-                # nordpool unofficial uses dicts like {"start": ..., "value": 0.12}
                 if isinstance(item, dict):
                     val = item.get("value") or item.get("price")
                 else:

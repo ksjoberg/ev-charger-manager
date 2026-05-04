@@ -218,6 +218,8 @@ def strategy_minimize_cost(
     phases: int = 1,
     voltage: float = 230.0,
     hourly_solar_forecast: list[float] | None = None,
+    solar_excess_kw: float = 0.0,
+    export_price: float | None = None,
     now: datetime | None = None,
 ) -> ChargeDecision:
     """Charge only during the cheapest hours of the available price window.
@@ -226,8 +228,12 @@ def strategy_minimize_cost(
     cost (max(0, charging_kw - solar_kw) * price) so hours with high solar
     coverage are preferred even at higher nominal prices.
 
+    When solar_excess_kw >= min_charging_kw and export_price is set, the
+    effective cost of charging right now is export_price (opportunity cost),
+    which is used for the current-slot decision.
+
     Args:
-        current_price: Current spot price (any currency/unit).
+        current_price: Current import spot price.
         hourly_prices: Future hourly prices aligned to current hour = index 0.
         min_current: Minimum charge current.
         max_current: Maximum charge current.
@@ -236,6 +242,8 @@ def strategy_minimize_cost(
         voltage: Phase voltage in V.
         hourly_solar_forecast: Per-hour available-kW forecast aligned to current
             hour = index 0. When provided, enables net-cost slot ranking.
+        solar_excess_kw: Real-time solar/grid export available (kW).
+        export_price: Current grid export price; used as opportunity cost when solar covers load.
         now: Override for current time (used in tests).
     """
     if not hourly_prices:
@@ -244,13 +252,26 @@ def strategy_minimize_cost(
             reason="No price data – charging at max as fallback",
         )
 
+    min_charging_kw = (min_current * phases * voltage) / 1000.0
+    solar_covering = solar_excess_kw >= min_charging_kw and export_price is not None
+    effective_price_now = export_price if solar_covering else current_price
+
     charging_kw = (max_current * phases * voltage) / 1000.0
     in_cheap_slot, threshold = _net_cost_rank(
         hourly_prices, hourly_solar_forecast, charge_hours_needed,
-        current_price, charging_kw,
+        effective_price_now, charging_kw,
     )
 
     if in_cheap_slot:
+        if solar_covering:
+            return ChargeDecision(
+                target_current=max_current,
+                reason=(
+                    f"Solar covers load ({solar_excess_kw:.2f} kW excess); "
+                    f"effective cost {effective_price_now:.4f} ≤ threshold {threshold:.4f}; "
+                    f"charging at {max_current:.0f} A"
+                ),
+            )
         if hourly_solar_forecast and threshold is not None:
             solar_now = hourly_solar_forecast[0] if hourly_solar_forecast else 0.0
             return ChargeDecision(

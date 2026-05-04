@@ -21,30 +21,28 @@
       },
       "solar": {
         "title": "Solar / PV Setup",
-        "description": "Configure your photovoltaic installation so the manager can estimate solar output from weather and sun position.",
+        "description": "Connect your Forecast.Solar sensors and optional real-time PV or grid power sensors.",
         "data": {
-          "pv_peak_power": "PV system peak power",
-          "weather_entity": "Weather entity",
+          "forecast_solar_entities": "Forecast.Solar entities (optional)",
           "pv_power_entity": "PV power sensor (optional)",
-          "grid_power_entity": "Grid power sensor (optional)",
-          "forecast_solar_entities": "Forecast.Solar entities (optional)"
+          "grid_power_entity": "Grid power sensor (optional)"
         },
         "data_description": {
-          "pv_peak_power": "Nameplate capacity of your PV system in kWp. Set to 0 to disable solar estimation.",
-          "weather_entity": "Used to estimate cloud attenuation of solar output.",
-          "pv_power_entity": "Sensor reporting actual PV output in W or kW. When provided, replaces the weather-based estimate.",
-          "grid_power_entity": "Sensor reporting grid power (positive = export to grid). When provided, the measured solar export is used instead of the estimate.",
-          "forecast_solar_entities": "One or more Forecast.Solar sensors covering your PV arrays. Their hourly watts forecasts are summed and used to build a solar charging plan."
+          "forecast_solar_entities": "One or more Forecast.Solar sensors covering your PV arrays. Their hourly watt forecasts are summed to build a solar charging plan.",
+          "pv_power_entity": "Sensor reporting actual PV output in W or kW. When provided, used for real-time solar-excess decisions.",
+          "grid_power_entity": "Sensor reporting grid power (positive = export to grid). When provided, the measured solar export is used instead of the estimate."
         }
       },
       "pricing": {
         "title": "Electricity Pricing",
-        "description": "Connect a Nordpool (or compatible) price sensor to enable cost-aware charging.",
+        "description": "Connect Nordpool (or compatible) price sensors for import and export to enable cost-aware charging.",
         "data": {
-          "nordpool_entity": "Nordpool / spot price sensor (optional)"
+          "nordpool_import_entity": "Import price sensor (optional)",
+          "nordpool_export_entity": "Export price sensor (optional)"
         },
         "data_description": {
-          "nordpool_entity": "Any sensor whose state is the current spot price per kWh and whose attributes contain today's (and optionally tomorrow's) hourly prices. Both the unofficial 'nordpool' HACS integration and the official Nordpool integration are supported."
+          "nordpool_import_entity": "Sensor whose state is the current all-in import spot price per kWh and whose attributes contain today's (and optionally tomorrow's) hourly prices.",
+          "nordpool_export_entity": "Sensor whose state is the current all-in export spot price per kWh. Used as opportunity cost when solar excess is available."
         }
       },
       "ev": {
@@ -80,12 +78,11 @@
           "max_current": "Maximum charge current",
           "phases": "Number of phases",
           "voltage": "Phase voltage",
-          "pv_peak_power": "PV system peak power",
-          "weather_entity": "Weather entity",
+          "forecast_solar_entities": "Forecast.Solar entities",
           "pv_power_entity": "PV power sensor",
           "grid_power_entity": "Grid power sensor",
-          "nordpool_entity": "Nordpool / spot price sensor",
-          "forecast_solar_entities": "Forecast.Solar entities",
+          "nordpool_import_entity": "Import price sensor",
+          "nordpool_export_entity": "Export price sensor",
           "ev_battery_capacity_entity": "Battery capacity entity",
           "ev_target_soc_entity": "Charge target level entity",
           "ev_soc_entity": "Current SoC entity"
@@ -113,10 +110,16 @@
         "name": "Applied charge current"
       },
       "solar_power": {
-        "name": "Estimated solar power"
+        "name": "Solar power (measured)"
       },
-      "current_price": {
-        "name": "Current spot price"
+      "solar_forecast_now": {
+        "name": "Solar power (forecast)"
+      },
+      "current_import_price": {
+        "name": "Current import price"
+      },
+      "current_export_price": {
+        "name": "Current export price"
       },
       "charge_reason": {
         "name": "Charge decision reason"
@@ -130,8 +133,8 @@
       "grid_export": {
         "name": "Grid export power"
       },
-      "solar_forecast_now": {
-        "name": "Solar forecast (current hour)"
+      "charge_plan": {
+        "name": "Charge session plan"
       }
     },
     "number": {

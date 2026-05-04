@@ -31,30 +31,7 @@ class EVChargerSensorDescription(SensorEntityDescription):
     value_fn: object = None  # Callable[[EVChargerData], StateType]
 
 
-FORECAST_SOLAR_SENSORS: tuple[EVChargerSensorDescription, ...] = (
-    EVChargerSensorDescription(
-        key="solar_forecast_now",
-        translation_key="solar_forecast_now",
-        native_unit_of_measurement=UnitOfPower.KILO_WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:solar-power-variant",
-        value_fn=lambda d: round(d.hourly_solar_forecast[0], 3) if d.hourly_solar_forecast else None,
-    ),
-)
-
-GRID_EXPORT_SENSORS: tuple[EVChargerSensorDescription, ...] = (
-    EVChargerSensorDescription(
-        key="grid_export",
-        translation_key="grid_export",
-        native_unit_of_measurement=UnitOfPower.KILO_WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:transmission-tower-export",
-        value_fn=lambda d: round(d.grid_export_kw, 2) if d.grid_export_kw is not None else None,
-    ),
-)
-
+# Always-on sensors
 SENSOR_DESCRIPTIONS: tuple[EVChargerSensorDescription, ...] = (
     EVChargerSensorDescription(
         key="applied_current",
@@ -64,23 +41,6 @@ SENSOR_DESCRIPTIONS: tuple[EVChargerSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:current-ac",
         value_fn=lambda d: round(d.applied_current, 1),
-    ),
-    EVChargerSensorDescription(
-        key="solar_power",
-        translation_key="solar_power",
-        native_unit_of_measurement=UnitOfPower.KILO_WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:solar-power",
-        value_fn=lambda d: round(d.solar_power_kw, 2),
-    ),
-    EVChargerSensorDescription(
-        key="current_price",
-        translation_key="current_price",
-        # Unit intentionally omitted – it depends on the Nordpool entity's currency
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:cash-clock",
-        value_fn=lambda d: round(d.current_price, 4) if d.current_price is not None else None,
     ),
     EVChargerSensorDescription(
         key="charge_reason",
@@ -105,6 +65,73 @@ SENSOR_DESCRIPTIONS: tuple[EVChargerSensorDescription, ...] = (
         icon="mdi:clock-outline",
         value_fn=lambda d: round(d.charge_hours_needed, 1) if d.charge_hours_needed is not None else None,
     ),
+    EVChargerSensorDescription(
+        key="charge_plan",
+        translation_key="charge_plan",
+        icon="mdi:calendar-clock",
+        value_fn=lambda d: d.charge_plan or None,
+    ),
+)
+
+# Conditional: requires pv_power_entity
+SOLAR_ACTUAL_SENSORS: tuple[EVChargerSensorDescription, ...] = (
+    EVChargerSensorDescription(
+        key="solar_power",
+        translation_key="solar_power",
+        native_unit_of_measurement=UnitOfPower.KILO_WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:solar-power",
+        value_fn=lambda d: round(d.solar_power_kw, 2) if d.solar_power_kw is not None else None,
+    ),
+)
+
+# Conditional: requires forecast_solar_entities
+FORECAST_SOLAR_SENSORS: tuple[EVChargerSensorDescription, ...] = (
+    EVChargerSensorDescription(
+        key="solar_forecast_now",
+        translation_key="solar_forecast_now",
+        native_unit_of_measurement=UnitOfPower.KILO_WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:solar-power-variant",
+        value_fn=lambda d: round(d.solar_forecast_kw, 3) if d.solar_forecast_kw is not None else None,
+    ),
+)
+
+# Conditional: requires grid_power_entity
+GRID_EXPORT_SENSORS: tuple[EVChargerSensorDescription, ...] = (
+    EVChargerSensorDescription(
+        key="grid_export",
+        translation_key="grid_export",
+        native_unit_of_measurement=UnitOfPower.KILO_WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:transmission-tower-export",
+        value_fn=lambda d: round(d.grid_export_kw, 2) if d.grid_export_kw is not None else None,
+    ),
+)
+
+# Conditional: requires nordpool_import_entity
+NORDPOOL_IMPORT_SENSORS: tuple[EVChargerSensorDescription, ...] = (
+    EVChargerSensorDescription(
+        key="current_import_price",
+        translation_key="current_import_price",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:cash-plus",
+        value_fn=lambda d: round(d.current_import_price, 4) if d.current_import_price is not None else None,
+    ),
+)
+
+# Conditional: requires nordpool_export_entity
+NORDPOOL_EXPORT_SENSORS: tuple[EVChargerSensorDescription, ...] = (
+    EVChargerSensorDescription(
+        key="current_export_price",
+        translation_key="current_export_price",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:cash-minus",
+        value_fn=lambda d: round(d.current_export_price, 4) if d.current_export_price is not None else None,
+    ),
 )
 
 
@@ -116,10 +143,16 @@ async def async_setup_entry(
     """Set up EV Charger Manager sensor entities."""
     coordinator = entry.runtime_data.coordinator
     descriptions = list(SENSOR_DESCRIPTIONS)
+    if coordinator.pv_power_entity:
+        descriptions.extend(SOLAR_ACTUAL_SENSORS)
     if coordinator.forecast_solar_entities:
         descriptions.extend(FORECAST_SOLAR_SENSORS)
     if coordinator.grid_power_entity:
         descriptions.extend(GRID_EXPORT_SENSORS)
+    if coordinator.nordpool_import_entity:
+        descriptions.extend(NORDPOOL_IMPORT_SENSORS)
+    if coordinator.nordpool_export_entity:
+        descriptions.extend(NORDPOOL_EXPORT_SENSORS)
     async_add_entities(
         EVChargerManagerSensor(coordinator=coordinator, description=desc)
         for desc in descriptions
