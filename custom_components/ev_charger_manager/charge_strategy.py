@@ -34,7 +34,7 @@ def strategy_solar_excess(
     """Set current proportional to available solar excess.
 
     Args:
-        solar_power_kw: Estimated PV output in kW (used when no grid sensor).
+        solar_power_kw: Measured or estimated PV output in kW.
         min_current: Minimum charge current the charger accepts.
         max_current: Maximum allowed charge current.
         phases: Number of AC phases (1 or 3).
@@ -42,11 +42,20 @@ def strategy_solar_excess(
         grid_export_kw: If provided, use this as the available excess instead
             of the solar estimate.  Positive value means the site is currently
             exporting to the grid, i.e. available for EV charging.
-        ev_charging_kw: Power currently drawn by the EV charger (kW).  The
-            consumption sensor includes this load, so we add it back to recover
-            the true available PV excess and avoid oscillation.
+        ev_charging_kw: Power currently drawn by the EV charger (kW).  Since
+            grid_export_kw is measured after all loads (including current EV draw),
+            we add it back to get total available capacity for EV charging.
     """
+    # Total capacity available for EV charging:
+    # - With grid sensor: current export + what EV is already using
+    # - Without grid sensor: solar estimate + what EV is already using
+    # This allows the charger to ramp up as more solar becomes available.
     available_kw = (grid_export_kw if grid_export_kw is not None else solar_power_kw) + ev_charging_kw
+    
+    # Safety check: When both grid export and measured solar are available,
+    # cap at solar production to prevent grid import due to measurement timing issues.
+    if grid_export_kw is not None and solar_power_kw > 0:
+        available_kw = min(available_kw, solar_power_kw)
 
     if available_kw <= 0:
         return ChargeDecision(
@@ -155,13 +164,19 @@ def strategy_solar_price_blend(
         charge_hours_needed: Number of cheap slots to target (already scaled for
             sub-hourly granularity).
         grid_export_kw: Measured grid export; takes priority over solar estimate.
-        ev_charging_kw: Current EV draw included in the grid/consumption reading;
-            added back to recover true available excess.
+        ev_charging_kw: Current EV draw; added back to recover total available
+            capacity (grid export is measured after all loads including EV).
         hourly_solar_forecast: Per-hour available-kW forecast aligned to current
             hour = index 0. When provided, enables net-cost slot ranking.
     """
     # Step 1 – solar baseline (same as SOLAR_EXCESS)
     available_kw = (grid_export_kw if grid_export_kw is not None else solar_power_kw) + ev_charging_kw
+    
+    # Safety check: When both grid export and measured solar are available,
+    # cap at solar production to prevent grid import due to measurement timing issues.
+    if grid_export_kw is not None and solar_power_kw > 0:
+        available_kw = min(available_kw, solar_power_kw)
+    
     solar_amps = min(max_current, max(0.0, (available_kw * 1000.0) / (phases * voltage)))
 
     # Step 2 – cheap-slot detection
