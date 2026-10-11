@@ -106,8 +106,8 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             logger=LOGGER,
             name=DOMAIN,
             update_interval=timedelta(minutes=UPDATE_INTERVAL_MINUTES),
+            config_entry=entry,
         )
-        self.config_entry = entry
         self._tracker = DailyEnergyTracker()
         self._warned_no_price_series = False
         self._waiting_for_prices = False
