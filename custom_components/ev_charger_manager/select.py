@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.components.select import SelectEntity
 
-from .const import CHARGE_MODES, DOMAIN, ChargeMode
+from .const import CHARGE_MODES, ChargeMode
 from .entity import EVChargerManagerEntity
 
 if TYPE_CHECKING:
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
+    hass: HomeAssistant,  # noqa: ARG001
     entry: EVChargerManagerConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
@@ -31,15 +31,17 @@ async def async_setup_entry(
 class EVChargerModeSelect(EVChargerManagerEntity, SelectEntity):
     """Select entity for choosing the active charge strategy."""
 
-    _attr_options = [mode.value for mode in CHARGE_MODES]
     _attr_icon = "mdi:ev-station"
     _attr_translation_key = "charge_mode"
 
     def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        """Initialize the select entity."""
         super().__init__(coordinator, unique_id_suffix="charge_mode")
+        self._attr_options = [mode.value for mode in CHARGE_MODES]
 
     @property
     def current_option(self) -> str:
+        """Return the active charge mode."""
         return self.coordinator.current_mode.value
 
     async def async_select_option(self, option: str) -> None:

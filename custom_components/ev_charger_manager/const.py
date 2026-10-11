@@ -45,13 +45,20 @@ UPDATE_INTERVAL_MINUTES = 5
 
 
 class ChargeMode(StrEnum):
+    """Available charge strategies."""
+
     ASAP = "asap"
     SOLAR_EXCESS = "solar_excess"
     MINIMIZE_COST = "minimize_cost"
     SOLAR_PRICE_BLEND = "solar_price_blend"
 
 
-CHARGE_MODES = [ChargeMode.ASAP, ChargeMode.SOLAR_EXCESS, ChargeMode.MINIMIZE_COST, ChargeMode.SOLAR_PRICE_BLEND]
+CHARGE_MODES = [
+    ChargeMode.ASAP,
+    ChargeMode.SOLAR_EXCESS,
+    ChargeMode.MINIMIZE_COST,
+    ChargeMode.SOLAR_PRICE_BLEND,
+]
 DEFAULT_CHARGE_MODE = ChargeMode.ASAP
 
 # Attribute names tried when reading hourly prices from Nordpool-style sensors
