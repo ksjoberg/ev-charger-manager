@@ -248,6 +248,40 @@ def test_missing_values_keep_alignment():
     assert series[0].start == (DAY + timedelta(hours=1)).astimezone(UTC)
 
 
+def test_timestamp_price_mapping_spans_both_days():
+    prices = {
+        (DAY + timedelta(minutes=15 * q)).isoformat(sep=" "): float(q)
+        for q in range(192)
+    }
+    series = P.parse_price_series(
+        {"prices": prices}, DAY, DAY + timedelta(days=1), DAY + timedelta(days=2)
+    )
+    assert len(series) == 192
+    assert series[100].start == (DAY + timedelta(minutes=1500)).astimezone(UTC)
+    assert series[-1].end == (DAY + timedelta(days=2)).astimezone(UTC)
+    assert series[-1].value == 191
+
+
+def test_timestamp_price_mapping_avoids_expensive_current_slot():
+    # All-in evening prices from a "prices: {start: value}" attribute
+    evening = [2.899, 2.930, 3.265, 3.101, 3.014, 2.809, 2.953, 2.910, 2.843]
+    evening += [2.659, 2.910, 2.718, 2.713, 2.685, 2.766, 2.598, 2.509, 2.230]
+    evening += [2.391, 2.134, 2.045, 1.876, 2.094, 2.016, 1.906, 1.815]
+    start = DAY - timedelta(days=1) + timedelta(hours=17, minutes=30)
+    prices = {
+        (start + timedelta(minutes=15 * q)).isoformat(sep=" "): p
+        for q, p in enumerate(evening)
+    }
+    series = P.parse_price_series(
+        {"prices": prices}, DAY - timedelta(days=1), DAY, DAY + timedelta(days=1)
+    )
+    slots = P.build_slots(start, DAY, series, [], {}, BASE_KW, 2.899)
+    plan = P.plan_energy(slots, 1.0, MIN_KW, MAX_KW)
+    assert plan.current.energy_kwh == 0
+    charged = {s.slot.import_price for s in plan.slots if s.energy_kwh > 0}
+    assert max(charged) < 2.0
+
+
 def test_unpublished_slots_use_previous_day_prices():
     imp, exp, solar = make_day(cheap_night, sun)
     slots = P.build_slots(

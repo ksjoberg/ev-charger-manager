@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import itertools
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -96,6 +97,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         )
         self.config_entry = entry
         self._tracker = DailyEnergyTracker()
+        self._warned_no_price_series = False
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
@@ -414,8 +416,22 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
                 attrs = np_state.attributes
                 import_series = parse_price_series(dict(attrs), *day_starts)
+                if not import_series and not self._warned_no_price_series:
+                    LOGGER.warning(
+                        "No price schedule found in the attributes of %s; "
+                        "planning will assume the current price for every slot",
+                        self.nordpool_import_entity,
+                    )
+                self._warned_no_price_series = not import_series
                 today_prices = _extract_price_list(attrs, NORDPOOL_PRICE_ATTRS)
                 tomorrow_prices = _extract_price_list(attrs, NORDPOOL_TOMORROW_ATTRS)
+                if not today_prices and import_series:
+                    # Timestamped mappings ({start: price}) only parse as a series
+                    utc_bounds = [dt_util.as_utc(d) for d in day_starts]
+                    today_prices, tomorrow_prices = (
+                        [iv.value for iv in import_series if lo <= iv.start < hi]
+                        for lo, hi in itertools.pairwise(utc_bounds)
+                    )
                 result.hourly_prices = today_prices + tomorrow_prices
                 if len(today_prices) >= 20:
                     slots_per_hour = max(1, round(len(today_prices) / 24))
