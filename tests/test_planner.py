@@ -479,9 +479,8 @@ def test_reason_describes_today_and_tomorrow_plans():
     assert decision.target_current == 0
     assert decision.reason == (
         "Fixed daily: waiting, next charge 22:00. "
-        "Today: 3.0 kWh left by 00:00 – 22:00–00:00 3.0 kWh · est. cost 1.85. "
-        "Tomorrow: 5.0 kWh by 00:00 – 00:00–04:00 5.0 kWh · est. cost 4.00 "
-        "(prices until 12:00)"
+        "Today: 3.0 kWh 22:00–00:00, est. 1.85. "
+        "Tomorrow: 5.0 kWh 00:00–04:00, est. 4.00, prices until 12:00"
     )
 
 
@@ -491,6 +490,49 @@ def test_reason_says_when_tomorrows_prices_are_missing():
         plan, MIN_A, MAX_A, PH, V, TZ, next_window_end=MIDNIGHT + timedelta(days=1)
     )
     assert decision.reason == (
-        "Fixed daily: nothing left to charge in this window. "
-        "Today: daily amount reached. Tomorrow: prices not published yet"
+        "Fixed daily: daily amount reached. Tomorrow: prices not published yet"
     )
+
+
+def test_reason_reports_deferral_saving():
+    plan = P.plan_energy(
+        TODAY_EXPENSIVE,
+        5,
+        MIN_KW,
+        MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT,
+        next_kwh=5,
+        min_saving=0.5,
+    )
+    tomorrow = P.plan_energy(
+        TOMORROW_CHEAP_NIGHT, 5 + plan.deferred_kwh, MIN_KW, MAX_KW
+    )
+    decision = S.strategy_fixed_daily_amount(
+        plan,
+        MIN_A,
+        MAX_A,
+        PH,
+        V,
+        TZ,
+        next_plan=tomorrow,
+        next_window_end=MIDNIGHT + timedelta(days=1),
+    )
+    assert decision.reason == (
+        "Fixed daily: waiting, no charging planned. "
+        "Today: 5.0 kWh deferred to tomorrow, saves 6.00. "
+        "Tomorrow: 10.0 kWh (incl. 5.0 deferred) 00:00–06:00, est. 8.00"
+    )
+
+
+def test_raw_slots_report_energy_and_current_per_slot():
+    today = hourly(T14, [2.0] * 8 + [0.5, 1.0])
+    plan = P.plan_energy(today, 3, MIN_KW, MAX_KW)
+    raw = P.plan_slots_raw(plan, TZ, V * PH)
+    assert len(raw) == 10
+    assert raw[0]["start"] == "2026-10-12T14:00:00+02:00"
+    assert raw[0]["end"] == "2026-10-12T15:00:00+02:00"
+    assert [r["kwh"] for r in raw[-3:]] == [0, 2.3, 0.7]
+    # A slot below minimum power runs at the minimum current for part of it
+    assert [r["current"] for r in raw[-3:]] == [0, MAX_A, MIN_A]
+    assert raw[-1]["price"] == 1.0
+    assert P.plan_slots_raw(None, TZ, V * PH) == []
