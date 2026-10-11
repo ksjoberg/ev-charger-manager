@@ -737,8 +737,12 @@ def plan_slots_raw(
     """
     Per-slot plan in Nordpool ``raw_*`` style, for charting.
 
-    ``current`` is the current commanded during the slot; slots needing less
-    than the minimum power run at the minimum current for part of the slot.
+    ``solar_kwh`` is drawn from the forecast solar surplus (PV minus base load)
+    and ``import_kwh`` from the grid, so the slot's cost is
+    ``solar_kwh * export_price + import_kwh * import_price``.  ``current`` is
+    the current commanded during the slot; slots needing less than the
+    minimum power run at the minimum current for part of the slot.  Prices
+    extrapolated from the previous day are flagged ``estimated_price``.
     """
     if plan is None or watts_per_amp <= 0:
         return []
@@ -748,10 +752,13 @@ def plan_slots_raw(
             "end": sp.slot.end.astimezone(tz).isoformat(),
             "kwh": round(sp.energy_kwh, 3),
             "solar_kwh": round(sp.solar_kwh, 3),
+            "import_kwh": round(sp.grid_kwh, 3),
             "current": round(
                 sp.charge_power_kw(plan.min_kw, plan.max_kw) * 1000 / watts_per_amp
             ),
-            "price": round(sp.slot.import_price, 4),
+            "import_price": round(sp.slot.import_price, 4),
+            "export_price": round(sp.slot.export_price, 4),
+            **({"estimated_price": True} if sp.slot.estimated_price else {}),
         }
         for sp in plan.slots
     ]
