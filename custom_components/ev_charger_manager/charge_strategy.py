@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .planner import ENERGY_EPS_KWH
+from .planner import ENERGY_EPS_KWH, plan_summary
 
 if TYPE_CHECKING:
     from datetime import datetime, tzinfo
@@ -344,6 +344,42 @@ def strategy_minimize_cost(
     )
 
 
+def _hhmm(dt: datetime, tz: tzinfo) -> str:
+    return dt.astimezone(tz).strftime("%H:%M")
+
+
+def _today_text(plan: ChargePlan, tz: tzinfo) -> str:
+    """Describe the rest of the current window's plan."""
+    if plan.requested_kwh <= ENERGY_EPS_KWH:
+        return "Today: daily amount reached"
+    deadline = _hhmm(plan.deadline, tz) if plan.deadline else "?"
+    return (
+        f"Today: {plan.requested_kwh:.1f} kWh left by {deadline} – "
+        f"{plan_summary(plan, tz, max_len=10_000)}"
+    )
+
+
+def _tomorrow_text(
+    next_plan: ChargePlan | None, window_end: datetime, carried_kwh: float, tz: tzinfo
+) -> str:
+    """Describe the next window's plan over its published prices."""
+    if next_plan is None or not next_plan.slots:
+        return "Tomorrow: prices not published yet"
+    carried = (
+        f" incl. {carried_kwh:.1f} kWh deferred" if carried_kwh > ENERGY_EPS_KWH else ""
+    )
+    coverage = (
+        f" (prices until {_hhmm(next_plan.deadline, tz)})"
+        if next_plan.deadline and next_plan.deadline < window_end
+        else ""
+    )
+    return (
+        f"Tomorrow: {next_plan.requested_kwh:.1f} kWh{carried} by "
+        f"{_hhmm(window_end, tz)} – {plan_summary(next_plan, tz, max_len=10_000)}"
+        f"{coverage}"
+    )
+
+
 def strategy_fixed_daily_amount(
     plan: ChargePlan,
     min_current: float,
@@ -351,6 +387,9 @@ def strategy_fixed_daily_amount(
     phases: int,
     voltage: float,
     tz: tzinfo,
+    *,
+    next_plan: ChargePlan | None = None,
+    next_window_end: datetime | None = None,
 ) -> ChargeDecision:
     """
     Execute the current slot of a fixed-amount charge plan.
@@ -365,30 +404,22 @@ def strategy_fixed_daily_amount(
         phases: Number of AC phases.
         voltage: Phase voltage in V.
         tz: Time zone used for times in the reason string.
+        next_plan: Plan for the next window over its published prices, or
+            None when they are not published yet.
+        next_window_end: End of the next window; when given, the reason
+            also describes the next window's plan.
 
     """
+    parts = [_today_text(plan, tz)]
+    if next_window_end is not None:
+        parts.append(_tomorrow_text(next_plan, next_window_end, plan.deferred_kwh, tz))
+    outlook = ". ".join(parts)
+
     if plan.requested_kwh <= ENERGY_EPS_KWH:
         return ChargeDecision(
             target_current=0.0,
-            reason="Fixed daily amount: nothing left to charge in this window",
+            reason=f"Fixed daily: nothing left to charge in this window. {outlook}",
         )
-
-    deadline = plan.deadline.astimezone(tz).strftime("%H:%M") if plan.deadline else "?"
-    shortfall = (
-        f"; {plan.shortfall_kwh:.1f} kWh cannot fit before {deadline}"
-        if plan.shortfall_kwh > ENERGY_EPS_KWH
-        else ""
-    )
-    deferred = (
-        f"; {plan.deferred_kwh:.1f} kWh deferred to tomorrow "
-        f"(est. {plan.deferred_cost:.2f} instead of {plan.avoided_cost:.2f})"
-        if plan.deferred_kwh > ENERGY_EPS_KWH
-        else ""
-    )
-    summary = (
-        f"{plan.requested_kwh:.1f} kWh left by {deadline}, "
-        f"est. cost {plan.cost:.2f}{shortfall}{deferred}"
-    )
 
     watts_per_amp = phases * voltage
     min_kw = min_current * watts_per_amp / 1000.0
@@ -399,21 +430,19 @@ def strategy_fixed_daily_amount(
     if power_kw <= 0 or current is None:
         nxt = plan.next_charge()
         when = (
-            f"next charge {nxt.slot.start.astimezone(tz).strftime('%H:%M')}"
-            if nxt
-            else "no charging planned"
+            f"next charge {_hhmm(nxt.slot.start, tz)}" if nxt else "no charging planned"
         )
         return ChargeDecision(
             target_current=0.0,
-            reason=f"Fixed daily: waiting – {when}; {summary}",
+            reason=f"Fixed daily: waiting, {when}. {outlook}",
         )
 
     amps = min(max_current, power_kw * 1000.0 / watts_per_amp)
     return ChargeDecision(
         target_current=round(amps, 1),
         reason=(
-            f"Fixed daily: {current.energy_kwh:.2f} kWh this slot "
-            f"({current.solar_kwh:.2f} solar / {current.grid_kwh:.2f} grid) "
-            f"→ {amps:.1f} A; {summary}"
+            f"Fixed daily: charging {amps:.1f} A, {current.energy_kwh:.2f} kWh "
+            f"this slot ({current.solar_kwh:.2f} solar / "
+            f"{current.grid_kwh:.2f} grid). {outlook}"
         ),
     )

@@ -460,3 +460,37 @@ def test_tracker_carries_deferred_energy_into_next_window():
     day_after = tomorrow + timedelta(days=1)
     tr.update(day_after, day_after, 10.0)
     assert tr.carry_over_kwh == 0
+
+
+def test_reason_describes_today_and_tomorrow_plans():
+    today = hourly(T14, [2.0] * 8 + [0.5, 1.0])
+    plan = P.plan_energy(today, 3, MIN_KW, MAX_KW)
+    tomorrow = P.plan_energy(TOMORROW_CHEAP_NIGHT[:12], 5, MIN_KW, MAX_KW)
+    decision = S.strategy_fixed_daily_amount(
+        plan,
+        MIN_A,
+        MAX_A,
+        PH,
+        V,
+        TZ,
+        next_plan=tomorrow,
+        next_window_end=MIDNIGHT + timedelta(days=1),
+    )
+    assert decision.target_current == 0
+    assert decision.reason == (
+        "Fixed daily: waiting, next charge 22:00. "
+        "Today: 3.0 kWh left by 00:00 – 22:00–00:00 3.0 kWh · est. cost 1.85. "
+        "Tomorrow: 5.0 kWh by 00:00 – 00:00–04:00 5.0 kWh · est. cost 4.00 "
+        "(prices until 12:00)"
+    )
+
+
+def test_reason_says_when_tomorrows_prices_are_missing():
+    plan = P.plan_energy(TODAY_EXPENSIVE, 0, MIN_KW, MAX_KW)
+    decision = S.strategy_fixed_daily_amount(
+        plan, MIN_A, MAX_A, PH, V, TZ, next_window_end=MIDNIGHT + timedelta(days=1)
+    )
+    assert decision.reason == (
+        "Fixed daily: nothing left to charge in this window. "
+        "Today: daily amount reached. Tomorrow: prices not published yet"
+    )

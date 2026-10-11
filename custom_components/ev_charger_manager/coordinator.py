@@ -562,16 +562,26 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 ]
 
             watts_per_amp = self.phases * self.voltage
+            min_kw = self.min_current * watts_per_amp / 1000.0
+            max_kw = self.max_current * watts_per_amp / 1000.0
             plan = plan_energy(
                 slots,
                 remaining_kwh,
-                min_kw=self.min_current * watts_per_amp / 1000.0,
-                max_kw=self.max_current * watts_per_amp / 1000.0,
+                min_kw=min_kw,
+                max_kw=max_kw,
                 next_slots=next_slots,
                 next_kwh=self.daily_kwh,
                 min_saving=self.defer_min_saving / 100.0,
             )
             self._tracker.deferred_kwh = plan.deferred_kwh
+            # Preview of the next window: its own amount plus what is deferred
+            next_plan = (
+                plan_energy(
+                    next_slots, self.daily_kwh + plan.deferred_kwh, min_kw, max_kw
+                )
+                if next_slots
+                else None
+            )
             tz = dt_util.get_default_time_zone()
             decision = strategy_fixed_daily_amount(
                 plan,
@@ -580,6 +590,10 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 phases=self.phases,
                 voltage=self.voltage,
                 tz=tz,
+                next_plan=next_plan,
+                next_window_end=(
+                    window_start + timedelta(days=2) if import_series else None
+                ),
             )
             result.charge_plan = plan_summary(plan, tz)
             result.charge_plan_attributes = {
