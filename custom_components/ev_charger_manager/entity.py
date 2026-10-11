@@ -20,6 +20,7 @@ class EVChargerManagerEntity(CoordinatorEntity[EVChargerManagerCoordinator]):
         coordinator: EVChargerManagerCoordinator,
         unique_id_suffix: str,
     ) -> None:
+        """Initialize the entity and its device info."""
         super().__init__(coordinator)
         entry_id = coordinator.config_entry.entry_id
         self._attr_unique_id = f"{entry_id}_{unique_id_suffix}"

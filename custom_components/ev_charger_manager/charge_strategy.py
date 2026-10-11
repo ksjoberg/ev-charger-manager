@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 
 @dataclass
@@ -15,7 +18,7 @@ class ChargeDecision:
 
 
 def strategy_asap(max_current: float) -> ChargeDecision:
-    """Always charge at maximum available current."""
+    """Charge at the maximum available current."""
     return ChargeDecision(
         target_current=max_current,
         reason=f"ASAP – charging at {max_current:.0f} A",
@@ -31,7 +34,8 @@ def strategy_solar_excess(
     grid_export_kw: float | None = None,
     ev_charging_kw: float = 0.0,
 ) -> ChargeDecision:
-    """Set current proportional to available solar excess.
+    """
+    Set current proportional to available solar excess.
 
     Args:
         solar_power_kw: Measured or estimated PV output in kW.
@@ -45,13 +49,16 @@ def strategy_solar_excess(
         ev_charging_kw: Power currently drawn by the EV charger (kW).  Since
             grid_export_kw is measured after all loads (including current EV draw),
             we add it back to get total available capacity for EV charging.
+
     """
     # Total capacity available for EV charging:
     # - With grid sensor: current export + what EV is already using
     # - Without grid sensor: solar estimate + what EV is already using
     # This allows the charger to ramp up as more solar becomes available.
-    available_kw = (grid_export_kw if grid_export_kw is not None else solar_power_kw) + ev_charging_kw
-    
+    available_kw = (
+        grid_export_kw if grid_export_kw is not None else solar_power_kw
+    ) + ev_charging_kw
+
     # Safety check: When both grid export and measured solar are available,
     # cap at solar production to prevent grid import due to measurement timing issues.
     if grid_export_kw is not None and solar_power_kw > 0:
@@ -78,9 +85,7 @@ def strategy_solar_excess(
 
     return ChargeDecision(
         target_current=round(target, 1),
-        reason=(
-            f"Solar excess {available_kw:.2f} kW → charging at {target:.1f} A"
-        ),
+        reason=(f"Solar excess {available_kw:.2f} kW → charging at {target:.1f} A"),
     )
 
 
@@ -91,7 +96,8 @@ def _net_cost_rank(
     current_price: float,
     charging_kw: float,
 ) -> tuple[bool, float | None]:
-    """Rank hours by net grid-import cost and return whether hour 0 is cheap.
+    """
+    Rank hours by net grid-import cost and return whether hour 0 is cheap.
 
     When a solar forecast is available, each hour's cost is weighted by how
     much of the charging power must be imported from the grid after solar
@@ -106,7 +112,11 @@ def _net_cost_rank(
     if hourly_solar_forecast:
         # Net cost = grid_import_kw * price, where grid_import = max(0, charging - solar)
         def _net_cost(i: int) -> float:
-            price = hourly_prices[i] if i < len(hourly_prices) else (hourly_prices[-1] if hourly_prices else 0.0)
+            price = (
+                hourly_prices[i]
+                if i < len(hourly_prices)
+                else (hourly_prices[-1] if hourly_prices else 0.0)
+            )
             solar = hourly_solar_forecast[i] if i < len(hourly_solar_forecast) else 0.0
             return max(0.0, charging_kw - solar) * price
 
@@ -119,13 +129,12 @@ def _net_cost_rank(
         cost_threshold = _net_cost(ranked[n - 1]) if n <= len(ranked) else cost_now
         # Use a pseudo-threshold for the reason message
         return in_cheap, cost_threshold
-    else:
-        n = max(1, min(charge_hours_needed, len(hourly_prices)))
-        sorted_prices = sorted(p for p in hourly_prices if p is not None)
-        if not sorted_prices:
-            return False, None
-        threshold = sorted_prices[n - 1]
-        return current_price <= threshold, threshold
+    n = max(1, min(charge_hours_needed, len(hourly_prices)))
+    sorted_prices = sorted(p for p in hourly_prices if p is not None)
+    if not sorted_prices:
+        return False, None
+    threshold = sorted_prices[n - 1]
+    return current_price <= threshold, threshold
 
 
 def strategy_solar_price_blend(
@@ -142,7 +151,8 @@ def strategy_solar_price_blend(
     ev_charging_kw: float = 0.0,
     hourly_solar_forecast: list[float] | None = None,
 ) -> ChargeDecision:
-    """Blend solar-excess and price-aware charging.
+    """
+    Blend solar-excess and price-aware charging.
 
     Base current mirrors SOLAR_EXCESS. During the cheapest charge_hours_needed
     slots, the current is boosted toward max_current by a factor of
@@ -168,16 +178,21 @@ def strategy_solar_price_blend(
             capacity (grid export is measured after all loads including EV).
         hourly_solar_forecast: Per-hour available-kW forecast aligned to current
             hour = index 0. When provided, enables net-cost slot ranking.
+
     """
     # Step 1 – solar baseline (same as SOLAR_EXCESS)
-    available_kw = (grid_export_kw if grid_export_kw is not None else solar_power_kw) + ev_charging_kw
-    
+    available_kw = (
+        grid_export_kw if grid_export_kw is not None else solar_power_kw
+    ) + ev_charging_kw
+
     # Safety check: When both grid export and measured solar are available,
     # cap at solar production to prevent grid import due to measurement timing issues.
     if grid_export_kw is not None and solar_power_kw > 0:
         available_kw = min(available_kw, solar_power_kw)
-    
-    solar_amps = min(max_current, max(0.0, (available_kw * 1000.0) / (phases * voltage)))
+
+    solar_amps = min(
+        max_current, max(0.0, (available_kw * 1000.0) / (phases * voltage))
+    )
 
     # Step 2 – cheap-slot detection
     in_cheap_slot = False
@@ -185,8 +200,11 @@ def strategy_solar_price_blend(
     if price_awareness > 0:
         charging_kw = (max_current * phases * voltage) / 1000.0
         in_cheap_slot, threshold = _net_cost_rank(
-            hourly_prices, hourly_solar_forecast, charge_hours_needed,
-            current_price, charging_kw,
+            hourly_prices,
+            hourly_solar_forecast,
+            charge_hours_needed,
+            current_price,
+            charging_kw,
         )
 
     # Step 3 – blend toward max_current during cheap slots
@@ -198,7 +216,11 @@ def strategy_solar_price_blend(
 
     # Step 4 – min_current gate
     if target < min_current:
-        slot_note = f"price {current_price:.4f} ≤ {threshold:.4f}, " if in_cheap_slot and threshold is not None else ""
+        slot_note = (
+            f"price {current_price:.4f} ≤ {threshold:.4f}, "
+            if in_cheap_slot and threshold is not None
+            else ""
+        )
         return ChargeDecision(
             target_current=0.0,
             reason=(
@@ -235,9 +257,10 @@ def strategy_minimize_cost(
     hourly_solar_forecast: list[float] | None = None,
     solar_excess_kw: float = 0.0,
     export_price: float | None = None,
-    now: datetime | None = None,
+    now: datetime | None = None,  # noqa: ARG001
 ) -> ChargeDecision:
-    """Charge only during the cheapest hours of the available price window.
+    """
+    Charge only during the cheapest hours of the available price window.
 
     When hourly_solar_forecast is provided, slot selection uses net grid-import
     cost (max(0, charging_kw - solar_kw) * price) so hours with high solar
@@ -260,6 +283,7 @@ def strategy_minimize_cost(
         solar_excess_kw: Real-time solar/grid export available (kW).
         export_price: Current grid export price; used as opportunity cost when solar covers load.
         now: Override for current time (used in tests).
+
     """
     if not hourly_prices:
         return ChargeDecision(
@@ -273,8 +297,11 @@ def strategy_minimize_cost(
 
     charging_kw = (max_current * phases * voltage) / 1000.0
     in_cheap_slot, threshold = _net_cost_rank(
-        hourly_prices, hourly_solar_forecast, charge_hours_needed,
-        effective_price_now, charging_kw,
+        hourly_prices,
+        hourly_solar_forecast,
+        charge_hours_needed,
+        effective_price_now,
+        charging_kw,
     )
 
     if in_cheap_slot:

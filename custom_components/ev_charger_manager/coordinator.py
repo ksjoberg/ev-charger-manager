@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .charge_strategy import (
     ChargeDecision,
@@ -19,18 +21,18 @@ from .const import (
     CONF_CHARGE_DEADBAND,
     CONF_CHARGE_MODE,
     CONF_CHARGER_CURRENT_ENTITY,
-    CONF_FORECAST_SOLAR_ENTITIES,
-    CONF_GRID_POWER_ENTITY,
-    CONF_NORDPOOL_EXPORT_ENTITY,
-    CONF_NORDPOOL_IMPORT_ENTITY,
-    CONF_PRICE_AWARENESS,
-    CONF_PV_POWER_ENTITY,
-    CONF_MAX_CURRENT,
-    CONF_MIN_CURRENT,
     CONF_EV_BATTERY_CAPACITY_ENTITY,
     CONF_EV_SOC_ENTITY,
     CONF_EV_TARGET_SOC_ENTITY,
+    CONF_FORECAST_SOLAR_ENTITIES,
+    CONF_GRID_POWER_ENTITY,
+    CONF_MAX_CURRENT,
+    CONF_MIN_CURRENT,
+    CONF_NORDPOOL_EXPORT_ENTITY,
+    CONF_NORDPOOL_IMPORT_ENTITY,
     CONF_PHASES,
+    CONF_PRICE_AWARENESS,
+    CONF_PV_POWER_ENTITY,
     CONF_VOLTAGE,
     DEFAULT_BASE_LOAD_W,
     DEFAULT_CHARGE_DEADBAND,
@@ -48,8 +50,6 @@ from .const import (
     UPDATE_INTERVAL_MINUTES,
     ChargeMode,
 )
-from homeassistant.util import dt as dt_util
-
 from .data import EVChargerData
 from .solar import read_solar_forecast, solar_forecast_at
 
@@ -65,6 +65,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
     config_entry: EVChargerManagerConfigEntry
 
     def __init__(self, hass: HomeAssistant, entry: EVChargerManagerConfigEntry) -> None:
+        """Initialize the coordinator."""
         super().__init__(
             hass=hass,
             logger=LOGGER,
@@ -79,11 +80,15 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     @property
     def charger_entity(self) -> str:
+        """Return the charger current entity ID."""
         return self.config_entry.data[CONF_CHARGER_CURRENT_ENTITY]
 
     @property
     def min_current(self) -> float:
-        return float(self.config_entry.options.get(CONF_MIN_CURRENT, DEFAULT_MIN_CURRENT))
+        """Return the minimum charge current (A)."""
+        return float(
+            self.config_entry.options.get(CONF_MIN_CURRENT, DEFAULT_MIN_CURRENT)
+        )
 
     @min_current.setter
     def min_current(self, value: float) -> None:
@@ -94,7 +99,10 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     @property
     def max_current(self) -> float:
-        return float(self.config_entry.options.get(CONF_MAX_CURRENT, DEFAULT_MAX_CURRENT))
+        """Return the maximum charge current (A)."""
+        return float(
+            self.config_entry.options.get(CONF_MAX_CURRENT, DEFAULT_MAX_CURRENT)
+        )
 
     @max_current.setter
     def max_current(self, value: float) -> None:
@@ -105,7 +113,10 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     @property
     def price_awareness(self) -> float:
-        return float(self.config_entry.options.get(CONF_PRICE_AWARENESS, DEFAULT_PRICE_AWARENESS))
+        """Return the price-awareness blend factor."""
+        return float(
+            self.config_entry.options.get(CONF_PRICE_AWARENESS, DEFAULT_PRICE_AWARENESS)
+        )
 
     @price_awareness.setter
     def price_awareness(self, value: float) -> None:
@@ -116,7 +127,10 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     @property
     def charge_deadband(self) -> float:
-        return float(self.config_entry.options.get(CONF_CHARGE_DEADBAND, DEFAULT_CHARGE_DEADBAND))
+        """Return the dead-band (A) for current changes."""
+        return float(
+            self.config_entry.options.get(CONF_CHARGE_DEADBAND, DEFAULT_CHARGE_DEADBAND)
+        )
 
     @charge_deadband.setter
     def charge_deadband(self, value: float) -> None:
@@ -127,47 +141,60 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     @property
     def phases(self) -> int:
+        """Return the number of charging phases."""
         return int(self.config_entry.data.get(CONF_PHASES, DEFAULT_PHASES))
 
     @property
     def voltage(self) -> float:
+        """Return the nominal phase voltage (V)."""
         return float(self.config_entry.data.get(CONF_VOLTAGE, DEFAULT_VOLTAGE))
 
     @property
     def grid_power_entity(self) -> str | None:
+        """Return the grid power sensor entity ID."""
         return self.config_entry.data.get(CONF_GRID_POWER_ENTITY)
 
     @property
     def pv_power_entity(self) -> str | None:
+        """Return the PV power sensor entity ID."""
         return self.config_entry.data.get(CONF_PV_POWER_ENTITY)
 
     @property
     def nordpool_import_entity(self) -> str | None:
+        """Return the import price entity ID."""
         return self.config_entry.data.get(CONF_NORDPOOL_IMPORT_ENTITY)
 
     @property
     def nordpool_export_entity(self) -> str | None:
+        """Return the export price entity ID."""
         return self.config_entry.data.get(CONF_NORDPOOL_EXPORT_ENTITY)
 
     @property
     def ev_battery_capacity_entity(self) -> str | None:
+        """Return the EV battery capacity entity ID."""
         return self.config_entry.data.get(CONF_EV_BATTERY_CAPACITY_ENTITY)
 
     @property
     def ev_target_soc_entity(self) -> str | None:
+        """Return the EV target SoC entity ID."""
         return self.config_entry.data.get(CONF_EV_TARGET_SOC_ENTITY)
 
     @property
     def ev_soc_entity(self) -> str | None:
+        """Return the EV current SoC entity ID."""
         return self.config_entry.data.get(CONF_EV_SOC_ENTITY)
 
     @property
     def forecast_solar_entities(self) -> list[str]:
+        """Return the solar forecast entity IDs."""
         return list(self.config_entry.data.get(CONF_FORECAST_SOLAR_ENTITIES) or [])
 
     @property
     def base_load_w(self) -> float:
-        return float(self.config_entry.options.get(CONF_BASE_LOAD_W, DEFAULT_BASE_LOAD_W))
+        """Return the household base load (W)."""
+        return float(
+            self.config_entry.options.get(CONF_BASE_LOAD_W, DEFAULT_BASE_LOAD_W)
+        )
 
     @base_load_w.setter
     def base_load_w(self, value: float) -> None:
@@ -182,6 +209,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     @property
     def current_mode(self) -> ChargeMode:
+        """Return the active charge mode."""
         return ChargeMode(
             self.config_entry.options.get(CONF_CHARGE_MODE, DEFAULT_CHARGE_MODE)
         )
@@ -197,7 +225,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
     # Main update logic
     # ------------------------------------------------------------------
 
-    async def _async_update_data(self) -> EVChargerData:
+    async def _async_update_data(self) -> EVChargerData:  # noqa: C901
         """Read HA states, compute a charge decision, and apply it."""
         result = EVChargerData(mode=self.current_mode.value)
         now = dt_util.now()
@@ -241,7 +269,9 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         effective_solar_kw = (
             result.solar_power_kw
             if result.solar_power_kw is not None
-            else (result.hourly_solar_forecast[0] if result.hourly_solar_forecast else 0.0)
+            else (
+                result.hourly_solar_forecast[0] if result.hourly_solar_forecast else 0.0
+            )
         )
 
         # --- Grid power (positive = export available for EV) ---
@@ -261,7 +291,9 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
         # Available solar excess: grid export if measured, else effective solar
         solar_excess_kw = (
-            result.grid_export_kw if result.grid_export_kw is not None else effective_solar_kw
+            result.grid_export_kw
+            if result.grid_export_kw is not None
+            else effective_solar_kw
         )
 
         # --- Nordpool import price ---
@@ -316,7 +348,9 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
         # Stop immediately when EV has reached its target SoC
         if result.ev_kwh_needed is not None and result.ev_kwh_needed <= 0:
-            decision = ChargeDecision(target_current=0.0, reason="EV has reached target SoC – stopping")
+            decision = ChargeDecision(
+                target_current=0.0, reason="EV has reached target SoC – stopping"
+            )
 
         elif mode == ChargeMode.ASAP:
             decision = strategy_asap(self.max_current)
@@ -337,7 +371,11 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         elif mode == ChargeMode.SOLAR_PRICE_BLEND:
             prev_current = self.data.applied_current if self.data else 0.0
             ev_charging_kw = (prev_current * self.phases * self.voltage) / 1000.0
-            hours = result.charge_hours_needed if result.charge_hours_needed is not None else DEFAULT_CHARGE_HOURS
+            hours = (
+                result.charge_hours_needed
+                if result.charge_hours_needed is not None
+                else DEFAULT_CHARGE_HOURS
+            )
             charge_slots = max(1, round(hours * slots_per_hour))
             decision = strategy_solar_price_blend(
                 solar_power_kw=effective_solar_kw,
@@ -355,7 +393,11 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             )
 
         else:  # MINIMIZE_COST
-            hours = result.charge_hours_needed if result.charge_hours_needed is not None else DEFAULT_CHARGE_HOURS
+            hours = (
+                result.charge_hours_needed
+                if result.charge_hours_needed is not None
+                else DEFAULT_CHARGE_HOURS
+            )
             charge_slots = max(1, round(hours * slots_per_hour))
             min_charging_kw = (self.min_current * self.phases * self.voltage) / 1000.0
 
@@ -381,22 +423,32 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                     fi_hour = (i - current_slot_in_today) // slots_per_hour
                     solar_kw = (
                         result.hourly_solar_forecast[fi_hour]
-                        if result.hourly_solar_forecast and 0 <= fi_hour < len(result.hourly_solar_forecast)
+                        if result.hourly_solar_forecast
+                        and 0 <= fi_hour < len(result.hourly_solar_forecast)
                         else 0.0
                     )
                     ep.append(
                         result.current_export_price
-                        if solar_kw >= min_charging_kw and result.current_export_price is not None
+                        if solar_kw >= min_charging_kw
+                        and result.current_export_price is not None
                         else price
                     )
                 result.charge_plan = _session_plan(
-                    ep, charge_slots, len(today_prices), current_slot_in_today, slots_per_hour
+                    ep,
+                    charge_slots,
+                    len(today_prices),
+                    current_slot_in_today,
+                    slots_per_hour,
                 )
 
         # Round to whole amperes; apply dead-band to suppress minor fluctuations
         target_amps = round(decision.target_current)
         prev_applied = int(self.data.applied_current) if self.data else 0
-        if target_amps > 0 and prev_applied > 0 and abs(target_amps - prev_applied) <= self.charge_deadband:
+        if (
+            target_amps > 0
+            and prev_applied > 0
+            and abs(target_amps - prev_applied) <= self.charge_deadband
+        ):
             target_amps = prev_applied
         result.applied_current = float(target_amps)
         result.charge_reason = decision.reason
@@ -408,6 +460,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     def _compute_ev_kwh_needed(self) -> float | None:
         """Return the kWh still needed to reach the target SoC, or None if data is missing."""
+
         def _read_float(entity_id: str | None) -> float | None:
             if not entity_id:
                 return None
@@ -417,7 +470,9 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             try:
                 return float(state.state)
             except ValueError:
-                LOGGER.warning("Could not parse numeric value from %s: %s", entity_id, state.state)
+                LOGGER.warning(
+                    "Could not parse numeric value from %s: %s", entity_id, state.state
+                )
                 return None
 
         capacity_kwh = _read_float(self.ev_battery_capacity_entity)
@@ -471,7 +526,8 @@ def _session_plan(
     current_slot_index: int,
     slots_per_hour: int,
 ) -> str:
-    """Summarise the charge session plan as a human-readable string.
+    """
+    Summarise the charge session plan as a human-readable string.
 
     effective_prices covers today_prices + tomorrow_prices, with export_price
     already substituted for solar-covered slots. charge_slots is already scaled
@@ -490,9 +546,8 @@ def _session_plan(
         if i < today_slot_count:
             if i >= current_slot_index and p <= threshold:
                 future_today.append(i)
-        else:
-            if p <= threshold:
-                tomorrow_all.append(i)
+        elif p <= threshold:
+            tomorrow_all.append(i)
 
     today_hours = len(future_today) / slots_per_hour
     tomorrow_hours = len(tomorrow_all) / slots_per_hour
@@ -507,21 +562,22 @@ def _session_plan(
 
 
 def _extract_solar_forecast(
-    hass: "HomeAssistant",
+    hass: HomeAssistant,
     entity_ids: list[str],
     base_load_w: float,
 ) -> list[float]:
-    """Aggregate Open-Meteo Solar Forecast entities into an hourly available-kW list.
+    """
+    Aggregate Open-Meteo Solar Forecast entities into an hourly available-kW list.
 
     Returns a list indexed by hour offset from the current hour (0 = now).
     Each value is the available surplus kW after deducting base_load_w.
-    
+
     Open-Meteo Solar Forecast provides 15-minute interval forecasts. This function:
     1. Sums watts across all entities for each timestamp
     2. Averages values within each hour to get hourly representative values
     """
     now = dt_util.now().replace(minute=0, second=0, microsecond=0)
-    
+
     # First pass: aggregate watts from all entities by timestamp
     timestamp_watts: dict[datetime, float] = {}
     for entity_id in entity_ids:
@@ -535,14 +591,12 @@ def _extract_solar_forecast(
             dt = dt_util.parse_datetime(ts_str)
             if dt is None:
                 continue
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 timestamp_watts[dt] = timestamp_watts.get(dt, 0.0) + float(watts)
-            except (TypeError, ValueError):
-                pass
-    
+
     if not timestamp_watts:
         return []
-    
+
     # Second pass: group by hour and average values within each hour
     hourly_values: dict[int, list[float]] = {}
     for dt, watts in timestamp_watts.items():
@@ -552,10 +606,10 @@ def _extract_solar_forecast(
             if offset not in hourly_values:
                 hourly_values[offset] = []
             hourly_values[offset].append(watts)
-    
+
     if not hourly_values:
         return []
-    
+
     # Build the final list by averaging values in each hour and subtracting base load
     max_offset = max(hourly_values.keys())
     result = []
@@ -585,10 +639,8 @@ def _extract_price_list(
                     val = item.get("value") or item.get("price")
                 else:
                     val = item
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     prices.append(float(val))
-                except (TypeError, ValueError):
-                    pass
             if prices:
                 return prices
     return []

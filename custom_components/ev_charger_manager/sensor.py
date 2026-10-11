@@ -13,7 +13,6 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import UnitOfElectricCurrent, UnitOfEnergy, UnitOfPower
 
-from .data import EVChargerData
 from .entity import EVChargerManagerEntity
 
 if TYPE_CHECKING:
@@ -63,7 +62,11 @@ SENSOR_DESCRIPTIONS: tuple[EVChargerSensorDescription, ...] = (
         native_unit_of_measurement="h",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:clock-outline",
-        value_fn=lambda d: round(d.charge_hours_needed, 1) if d.charge_hours_needed is not None else None,
+        value_fn=lambda d: (
+            round(d.charge_hours_needed, 1)
+            if d.charge_hours_needed is not None
+            else None
+        ),
     ),
     EVChargerSensorDescription(
         key="charge_plan",
@@ -82,7 +85,9 @@ SOLAR_ACTUAL_SENSORS: tuple[EVChargerSensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:solar-power",
-        value_fn=lambda d: round(d.solar_power_kw, 2) if d.solar_power_kw is not None else None,
+        value_fn=lambda d: (
+            round(d.solar_power_kw, 2) if d.solar_power_kw is not None else None
+        ),
     ),
 )
 
@@ -95,7 +100,9 @@ FORECAST_SOLAR_SENSORS: tuple[EVChargerSensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:solar-power-variant",
-        value_fn=lambda d: round(d.solar_forecast_kw, 3) if d.solar_forecast_kw is not None else None,
+        value_fn=lambda d: (
+            round(d.solar_forecast_kw, 3) if d.solar_forecast_kw is not None else None
+        ),
     ),
 )
 
@@ -108,7 +115,9 @@ GRID_EXPORT_SENSORS: tuple[EVChargerSensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:transmission-tower-export",
-        value_fn=lambda d: round(d.grid_export_kw, 2) if d.grid_export_kw is not None else None,
+        value_fn=lambda d: (
+            round(d.grid_export_kw, 2) if d.grid_export_kw is not None else None
+        ),
     ),
 )
 
@@ -119,7 +128,11 @@ NORDPOOL_IMPORT_SENSORS: tuple[EVChargerSensorDescription, ...] = (
         translation_key="current_import_price",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:cash-plus",
-        value_fn=lambda d: round(d.current_import_price, 4) if d.current_import_price is not None else None,
+        value_fn=lambda d: (
+            round(d.current_import_price, 4)
+            if d.current_import_price is not None
+            else None
+        ),
     ),
 )
 
@@ -130,7 +143,11 @@ NORDPOOL_EXPORT_SENSORS: tuple[EVChargerSensorDescription, ...] = (
         translation_key="current_export_price",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:cash-minus",
-        value_fn=lambda d: round(d.current_export_price, 4) if d.current_export_price is not None else None,
+        value_fn=lambda d: (
+            round(d.current_export_price, 4)
+            if d.current_export_price is not None
+            else None
+        ),
     ),
 )
 
@@ -169,11 +186,13 @@ class EVChargerManagerSensor(EVChargerManagerEntity, SensorEntity):
         coordinator: EVChargerManagerCoordinator,
         description: EVChargerSensorDescription,
     ) -> None:
+        """Initialize the sensor."""
         super().__init__(coordinator, unique_id_suffix=description.key)
         self.entity_description = description
 
     @property
     def native_value(self) -> object:
+        """Return the sensor value from coordinator data."""
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data)  # type: ignore[call-arg]

@@ -16,12 +16,12 @@ from .const import (
     CONF_EV_TARGET_SOC_ENTITY,
     CONF_FORECAST_SOLAR_ENTITIES,
     CONF_GRID_POWER_ENTITY,
-    CONF_NORDPOOL_EXPORT_ENTITY,
-    CONF_NORDPOOL_IMPORT_ENTITY,
-    CONF_PV_POWER_ENTITY,
     CONF_MAX_CURRENT,
     CONF_MIN_CURRENT,
+    CONF_NORDPOOL_EXPORT_ENTITY,
+    CONF_NORDPOOL_IMPORT_ENTITY,
     CONF_PHASES,
+    CONF_PV_POWER_ENTITY,
     CONF_VOLTAGE,
     DEFAULT_CHARGE_MODE,
     DEFAULT_MAX_CURRENT,
@@ -29,8 +29,6 @@ from .const import (
     DEFAULT_PHASES,
     DEFAULT_VOLTAGE,
     DOMAIN,
-    LOGGER,
-    ChargeMode,
 )
 
 if TYPE_CHECKING:
@@ -38,7 +36,8 @@ if TYPE_CHECKING:
 
 
 class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
-    """Config flow for EV Charger Manager.
+    """
+    Config flow for EV Charger Manager.
 
     Step 1 (user)    – charger entity, min/max current, phases, voltage
     Step 2 (solar)   – Open-Meteo Solar Forecast entities, optional real-time PV and grid sensors
@@ -49,6 +48,7 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self) -> None:
+        """Initialize the config flow."""
         self._data: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -58,6 +58,7 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Handle the charger setup step."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -139,6 +140,7 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_solar(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Handle the solar setup step."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -154,7 +156,7 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 if state is None:
                     errors[CONF_GRID_POWER_ENTITY] = "entity_not_found"
 
-            for eid in (user_input.get(CONF_FORECAST_SOLAR_ENTITIES) or []):
+            for eid in user_input.get(CONF_FORECAST_SOLAR_ENTITIES) or []:
                 if self.hass.states.get(eid) is None:
                     errors[CONF_FORECAST_SOLAR_ENTITIES] = "entity_not_found"
                     break
@@ -194,6 +196,7 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_pricing(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Handle the pricing setup step."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -232,6 +235,7 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_ev(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Handle the EV battery setup step."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -274,7 +278,9 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="ev",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(CONF_EV_BATTERY_CAPACITY_ENTITY): selector.EntitySelector(
+                    vol.Optional(
+                        CONF_EV_BATTERY_CAPACITY_ENTITY
+                    ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain=["sensor", "number"])
                     ),
                     vol.Optional(CONF_EV_TARGET_SOC_ENTITY): selector.EntitySelector(
@@ -296,6 +302,7 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,  # noqa: ARG004
     ) -> EVChargerManagerOptionsFlowHandler:
+        """Return the options flow handler."""
         return EVChargerManagerOptionsFlowHandler()
 
 
@@ -305,6 +312,7 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Manage the integration options."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -323,7 +331,7 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                 if entity_id and self.hass.states.get(entity_id) is None:
                     errors[key] = "entity_not_found"
 
-            for eid in (user_input.get(CONF_FORECAST_SOLAR_ENTITIES) or []):
+            for eid in user_input.get(CONF_FORECAST_SOLAR_ENTITIES) or []:
                 if self.hass.states.get(eid) is None:
                     errors[CONF_FORECAST_SOLAR_ENTITIES] = "entity_not_found"
                     break
@@ -382,7 +390,10 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         default=opts.get(CONF_MIN_CURRENT, DEFAULT_MIN_CURRENT),
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=0, max=32, step=1, unit_of_measurement="A",
+                            min=0,
+                            max=32,
+                            step=1,
+                            unit_of_measurement="A",
                             mode=selector.NumberSelectorMode.BOX,
                         )
                     ),
@@ -391,7 +402,10 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         default=opts.get(CONF_MAX_CURRENT, DEFAULT_MAX_CURRENT),
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=1, max=32, step=1, unit_of_measurement="A",
+                            min=1,
+                            max=32,
+                            step=1,
+                            unit_of_measurement="A",
                             mode=selector.NumberSelectorMode.BOX,
                         )
                     ),
@@ -409,7 +423,10 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         default=data.get(CONF_VOLTAGE, DEFAULT_VOLTAGE),
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=100, max=480, step=1, unit_of_measurement="V",
+                            min=100,
+                            max=480,
+                            step=1,
+                            unit_of_measurement="V",
                             mode=selector.NumberSelectorMode.BOX,
                         )
                     ),

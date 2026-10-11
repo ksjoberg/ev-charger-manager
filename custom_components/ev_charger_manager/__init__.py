@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 from homeassistant.const import Platform
 from homeassistant.loader import async_get_loaded_integration
 
-from .const import DOMAIN, LOGGER
 from .coordinator import EVChargerManagerCoordinator
 from .data import EVChargerManagerRuntimeData
 
