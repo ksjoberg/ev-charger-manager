@@ -1,0 +1,640 @@
+"""Cost-optimal planner for delivering a fixed amount of energy to the EV.
+
+The planning horizon is split into price slots (typically 15 min or 1 h, as
+published by Nordpool).  For every slot we know:
+
+* the all-in import price (what one more kWh from the grid costs),
+* the all-in export price (what one kWh of solar would earn if exported),
+* the forecast solar surplus (PV production minus household base load).
+
+Charging power drawn from the solar surplus costs the *export* price (lost
+export revenue); power beyond the surplus costs the *import* price.  The cost
+of charging at power ``e`` during a slot is therefore piecewise linear and
+convex in ``e``.  Because the charger cannot run below ``min_kw`` (but may be
+switched off part of the slot), the achievable cost curve for a slot is the
+lower convex hull of that function over ``0`` and ``[min_kw, max_kw]``.
+
+With convex per-slot cost curves and a single "total energy" constraint, a
+greedy fill of the cheapest marginal kWh across all slots is optimal.  This
+naturally handles cases where exporting solar now and importing later is
+cheaper, because the comparison is always export price now vs import price
+later.
+"""
+
+from __future__ import annotations
+
+import bisect
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta, tzinfo
+from typing import Any
+
+ENERGY_EPS_KWH = 0.005
+
+TODAY_PRICE_KEYS = ("raw_today", "today", "prices_today", "prices")
+TOMORROW_PRICE_KEYS = ("raw_tomorrow", "tomorrow", "prices_tomorrow")
+
+DEFAULT_SLOT = timedelta(minutes=15)
+# Solar samples further than this from a slot are treated as "no production".
+MAX_SOLAR_GAP = timedelta(hours=1)
+# Fallback prices when no price sensors are configured: prefer solar, then grid ASAP.
+FALLBACK_IMPORT_PRICE = 1.0
+FALLBACK_EXPORT_PRICE = 0.0
+
+
+# ----------------------------------------------------------------------
+# Input parsing
+# ----------------------------------------------------------------------
+
+
+def to_utc(value: Any) -> datetime | None:
+    """Parse a datetime or ISO string into a UTC-aware datetime."""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+@dataclass(frozen=True)
+class PriceInterval:
+    """A price valid from start (inclusive) to end (exclusive)."""
+
+    start: datetime
+    end: datetime
+    value: float
+
+
+def _parse_price_list(
+    raw: Any, day_start: datetime, day_end: datetime
+) -> list[PriceInterval]:
+    """Parse one day's price list.
+
+    Accepts either Nordpool ``raw_*`` style dicts (``start``/``end``/``value``)
+    or plain lists of numbers spread evenly over the day.
+    """
+    if not isinstance(raw, list) or not raw:
+        return []
+
+    if all(isinstance(item, dict) for item in raw):
+        parsed: list[tuple[datetime, datetime | None, float]] = []
+        for item in raw:
+            start = to_utc(item.get("start", item.get("start_time")))
+            end = to_utc(item.get("end", item.get("end_time")))
+            value = item.get("value", item.get("price"))
+            if start is None or value is None:
+                continue
+            try:
+                parsed.append((start, end, float(value)))
+            except (TypeError, ValueError):
+                continue
+        parsed.sort(key=lambda p: p[0])
+        default_len = (day_end - day_start) / max(1, len(raw))
+        intervals = []
+        for i, (start, raw_end, value) in enumerate(parsed):
+            end = raw_end
+            if end is None:
+                end = parsed[i + 1][0] if i + 1 < len(parsed) else start + default_len
+            intervals.append(PriceInterval(start, end, value))
+        return intervals
+
+    # Plain list: evenly spaced over the (possibly 23 h / 25 h) local day.
+    slot_len = (day_end - day_start) / len(raw)
+    intervals = []
+    for i, value in enumerate(raw):
+        if value is None:
+            continue  # keep index alignment for missing values
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            continue
+        start = day_start + i * slot_len
+        intervals.append(PriceInterval(start, start + slot_len, price))
+    return intervals
+
+
+def parse_price_series(
+    attrs: dict[str, Any],
+    today_start: datetime,
+    tomorrow_start: datetime,
+    day_after_start: datetime,
+) -> list[PriceInterval]:
+    """Extract today's and tomorrow's prices as timestamped intervals (UTC).
+
+    The day boundaries are local midnights; they are only used for plain number
+    lists that carry no timestamps.
+    """
+    bounds = [to_utc(d) for d in (today_start, tomorrow_start, day_after_start)]
+    if any(b is None for b in bounds):
+        return []
+    today, tomorrow, day_after = bounds  # type: ignore[misc]
+
+    intervals: list[PriceInterval] = []
+    for keys, day_start, day_end in (
+        (TODAY_PRICE_KEYS, today, tomorrow),
+        (TOMORROW_PRICE_KEYS, tomorrow, day_after),
+    ):
+        for key in keys:
+            parsed = _parse_price_list(attrs.get(key), day_start, day_end)
+            if parsed:
+                intervals.extend(parsed)
+                break
+
+    intervals.sort(key=lambda iv: iv.start)
+    deduped: list[PriceInterval] = []
+    for iv in intervals:
+        if deduped and iv.start < deduped[-1].end:
+            continue
+        deduped.append(iv)
+    return deduped
+
+
+def price_at(series: list[PriceInterval], t: datetime) -> float | None:
+    """Return the price valid at *t*, or None if not covered."""
+    for iv in series:
+        if iv.start <= t < iv.end:
+            return iv.value
+    return None
+
+
+def _interval_at(series: list[PriceInterval], t: datetime) -> PriceInterval | None:
+    for iv in series:
+        if iv.start <= t < iv.end:
+            return iv
+    return None
+
+
+def solar_kw_between(
+    samples: list[tuple[datetime, float]], start: datetime, end: datetime
+) -> float:
+    """Average forecast PV power (kW) for [start, end).
+
+    *samples* must be sorted by time.  Uses the mean of samples inside the
+    interval; falls back to linear interpolation at the midpoint.
+    """
+    if not samples:
+        return 0.0
+    times = [t for t, _ in samples]
+    lo = bisect.bisect_left(times, start)
+    hi = bisect.bisect_left(times, end)
+    if hi > lo:
+        return sum(kw for _, kw in samples[lo:hi]) / (hi - lo)
+
+    mid = start + (end - start) / 2
+    idx = bisect.bisect_left(times, mid)
+    if idx == 0:
+        t0, kw0 = samples[0]
+        return kw0 if t0 - mid <= MAX_SOLAR_GAP else 0.0
+    if idx == len(samples):
+        t1, kw1 = samples[-1]
+        return kw1 if mid - t1 <= MAX_SOLAR_GAP else 0.0
+    (t0, kw0), (t1, kw1) = samples[idx - 1], samples[idx]
+    span = (t1 - t0).total_seconds()
+    if span <= 0:
+        return kw0
+    frac = (mid - t0).total_seconds() / span
+    return kw0 + frac * (kw1 - kw0)
+
+
+# ----------------------------------------------------------------------
+# Slots
+# ----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PlanSlot:
+    """One planning interval with its prices and forecast solar surplus."""
+
+    start: datetime
+    end: datetime
+    import_price: float
+    export_price: float
+    surplus_kw: float  # solar available for the EV (PV minus base load), >= 0
+    estimated_price: bool = False
+
+    @property
+    def hours(self) -> float:
+        return max(0.0, (self.end - self.start).total_seconds() / 3600.0)
+
+
+def build_slots(  # noqa: PLR0913
+    now: datetime,
+    deadline: datetime,
+    import_series: list[PriceInterval],
+    export_series: list[PriceInterval],
+    solar_forecast: dict[datetime, float],
+    base_load_kw: float,
+    current_import_price: float | None = None,
+    current_export_price: float | None = None,
+) -> list[PlanSlot]:
+    """Split [now, deadline) into price slots.
+
+    Slots beyond the published prices use the price of the same time 24 h
+    earlier (persistence forecast) and are flagged as estimated.  The first
+    slot starts at *now* (it is the remainder of the current slot).
+    """
+    start_utc, deadline_utc = to_utc(now), to_utc(deadline)
+    if start_utc is None or deadline_utc is None or start_utc >= deadline_utc:
+        return []
+
+    samples = sorted(
+        (t, kw) for t, kw in ((to_utc(k), v) for k, v in solar_forecast.items()) if t
+    )
+    import_mean = (
+        sum(iv.value for iv in import_series) / len(import_series)
+        if import_series
+        else None
+    )
+    known_len = (
+        import_series[-1].end - import_series[-1].start if import_series else None
+    )
+    slot_len = known_len if known_len and known_len > timedelta(0) else DEFAULT_SLOT
+
+    slots: list[PlanSlot] = []
+    t = start_utc
+    while t < deadline_utc:
+        known = _interval_at(import_series, t)
+        if known is not None:
+            end = known.end
+            import_price = known.value
+            estimated = False
+        else:
+            # Align estimated slots to the slot grid (UTC epoch multiples).
+            step = slot_len.total_seconds()
+            end = datetime.fromtimestamp((t.timestamp() // step + 1) * step, UTC)
+            next_known = next((iv.start for iv in import_series if iv.start > t), None)
+            if next_known is not None:
+                end = min(end, next_known)
+            mid = t + (end - t) / 2
+            persisted = price_at(import_series, mid - timedelta(days=1))
+            if persisted is not None:
+                import_price = persisted
+            elif current_import_price is not None:
+                import_price = current_import_price
+            elif import_mean is not None:
+                import_price = import_mean
+            else:
+                import_price = FALLBACK_IMPORT_PRICE
+            estimated = bool(import_series)
+        end = min(end, deadline_utc)
+        mid = t + (end - t) / 2
+
+        export_price = price_at(export_series, mid)
+        if export_price is None:
+            export_price = price_at(export_series, mid - timedelta(days=1))
+        if export_price is None:
+            export_price = (
+                current_export_price
+                if current_export_price is not None
+                else FALLBACK_EXPORT_PRICE
+            )
+
+        pv_kw = solar_kw_between(samples, t, end)
+        slots.append(
+            PlanSlot(
+                start=t,
+                end=end,
+                import_price=import_price,
+                export_price=export_price,
+                surplus_kw=max(0.0, pv_kw - base_load_kw),
+                estimated_price=estimated,
+            )
+        )
+        t = end
+    return slots
+
+
+# ----------------------------------------------------------------------
+# Planning
+# ----------------------------------------------------------------------
+
+
+def _slot_segments(
+    slot: PlanSlot, min_kw: float, max_kw: float
+) -> list[tuple[float, float]]:
+    """Return the slot's marginal-cost curve as (price_per_kwh, kwh) segments.
+
+    Segments are in the order they must be consumed and have non-decreasing
+    prices (lower convex hull), so a global greedy fill is optimal.
+    """
+    hours = slot.hours
+    if hours <= 0 or max_kw <= 0:
+        return []
+    min_kw = min(max(0.0, min_kw), max_kw)
+    solar_kw = min(slot.surplus_kw, max_kw)
+
+    # Marginal cost over the power range [0, max_kw]: solar first, then grid.
+    pieces = [
+        (w, p)
+        for w, p in (
+            (solar_kw, slot.export_price),
+            (max_kw - solar_kw, slot.import_price),
+        )
+        if w > 0
+    ]
+
+    # Below min_kw the charger can only time-share at min_kw, so [0, min_kw]
+    # is a single chord priced at the average cost of running at min_kw.
+    merged: list[list[float]] = []
+    if min_kw > 0:
+        need, cost = min_kw, 0.0
+        rest: list[tuple[float, float]] = []
+        for w, p in pieces:
+            used = min(w, need)
+            cost += used * p
+            need -= used
+            if w - used > 0:
+                rest.append((w - used, p))
+        merged.append([min_kw, cost / min_kw])
+        pieces = rest
+    merged.extend([w, p] for w, p in pieces)
+
+    # Pool adjacent violators -> non-decreasing prices (convex hull).
+    hull: list[list[float]] = []
+    for seg in merged:
+        hull.append(seg)
+        while len(hull) >= 2 and hull[-1][1] < hull[-2][1]:
+            w2, p2 = hull.pop()
+            w1, p1 = hull.pop()
+            hull.append([w1 + w2, (w1 * p1 + w2 * p2) / (w1 + w2)])
+
+    return [(p, w * hours) for w, p in hull]
+
+
+@dataclass
+class SlotPlan:
+    """Planned charging for one slot."""
+
+    slot: PlanSlot
+    energy_kwh: float = 0.0
+    solar_kwh: float = 0.0
+    grid_kwh: float = 0.0
+    cost: float = 0.0
+
+    @property
+    def avg_power_kw(self) -> float:
+        hours = self.slot.hours
+        return self.energy_kwh / hours if hours > 0 else 0.0
+
+    def charge_power_kw(self, min_kw: float, max_kw: float) -> float:
+        """Power to command now so the slot's energy is delivered.
+
+        Below min_kw the slot is front-loaded at min_kw; the next re-plan
+        stops charging once the slot's share has been delivered.
+        """
+        if self.energy_kwh <= ENERGY_EPS_KWH:
+            return 0.0
+        return min(max_kw, max(self.avg_power_kw, min_kw))
+
+
+@dataclass
+class ChargePlan:
+    """Result of planning a fixed amount of energy over a set of slots."""
+
+    slots: list[SlotPlan]
+    requested_kwh: float
+    min_kw: float
+    max_kw: float
+    planned_kwh: float = 0.0
+    cost: float = 0.0
+    solar_kwh: float = 0.0
+    grid_kwh: float = 0.0
+    deadline: datetime | None = None
+    blocks: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def shortfall_kwh(self) -> float:
+        return max(0.0, self.requested_kwh - self.planned_kwh)
+
+    @property
+    def current(self) -> SlotPlan | None:
+        return self.slots[0] if self.slots else None
+
+    def next_charge(self) -> SlotPlan | None:
+        """First slot with planned charging."""
+        return next((s for s in self.slots if s.energy_kwh > ENERGY_EPS_KWH), None)
+
+
+def plan_energy(
+    slots: list[PlanSlot],
+    energy_kwh: float,
+    min_kw: float,
+    max_kw: float,
+) -> ChargePlan:
+    """Allocate *energy_kwh* across *slots* at minimum total cost."""
+    plan = ChargePlan(
+        slots=[SlotPlan(slot=s) for s in slots],
+        requested_kwh=max(0.0, energy_kwh),
+        min_kw=min_kw,
+        max_kw=max_kw,
+        deadline=slots[-1].end if slots else None,
+    )
+    if plan.requested_kwh <= ENERGY_EPS_KWH:
+        return plan
+
+    # (price, start, segment index, slot index, kwh); ties go to the earlier slot.
+    segments = [
+        (price, slot.start, k, i, kwh)
+        for i, slot in enumerate(slots)
+        for k, (price, kwh) in enumerate(_slot_segments(slot, min_kw, max_kw))
+    ]
+    segments.sort(key=lambda s: s[:3])
+
+    remaining = plan.requested_kwh
+    for _, _, _, i, kwh in segments:
+        if remaining <= 0:
+            break
+        take = min(kwh, remaining)
+        plan.slots[i].energy_kwh += take
+        remaining -= take
+
+    for sp in plan.slots:
+        if sp.energy_kwh <= 0:
+            continue
+        hours = sp.slot.hours
+        avg_kw = sp.avg_power_kw
+        run_kw = min(max_kw, max(avg_kw, min_kw)) if avg_kw > 0 else 0.0
+        duty = avg_kw / run_kw if run_kw > 0 else 0.0
+        sp.solar_kwh = duty * min(run_kw, sp.slot.surplus_kw) * hours
+        sp.grid_kwh = max(0.0, sp.energy_kwh - sp.solar_kwh)
+        sp.cost = (
+            sp.solar_kwh * sp.slot.export_price + sp.grid_kwh * sp.slot.import_price
+        )
+        plan.planned_kwh += sp.energy_kwh
+        plan.solar_kwh += sp.solar_kwh
+        plan.grid_kwh += sp.grid_kwh
+        plan.cost += sp.cost
+
+    plan.blocks = _merge_blocks(plan.slots)
+    return plan
+
+
+def _merge_blocks(slot_plans: list[SlotPlan]) -> list[dict[str, Any]]:
+    """Merge consecutive charging slots into blocks for display."""
+    blocks: list[dict[str, Any]] = []
+    for sp in slot_plans:
+        if sp.energy_kwh <= ENERGY_EPS_KWH:
+            continue
+        last = blocks[-1] if blocks else None
+        if last is not None and last["end"] == sp.slot.start:
+            last["end"] = sp.slot.end
+            last["kwh"] += sp.energy_kwh
+            last["solar_kwh"] += sp.solar_kwh
+            last["grid_kwh"] += sp.grid_kwh
+            last["cost"] += sp.cost
+        else:
+            blocks.append(
+                {
+                    "start": sp.slot.start,
+                    "end": sp.slot.end,
+                    "kwh": sp.energy_kwh,
+                    "solar_kwh": sp.solar_kwh,
+                    "grid_kwh": sp.grid_kwh,
+                    "cost": sp.cost,
+                }
+            )
+    return blocks
+
+
+# ----------------------------------------------------------------------
+# Presentation
+# ----------------------------------------------------------------------
+
+
+def _hhmm(dt: datetime, tz: tzinfo) -> str:
+    return dt.astimezone(tz).strftime("%H:%M")
+
+
+def plan_summary(plan: ChargePlan, tz: tzinfo, max_len: int = 255) -> str:
+    """Short human-readable plan, suitable for a sensor state (<= 255 chars)."""
+    if plan.requested_kwh <= ENERGY_EPS_KWH:
+        return "Daily amount reached"
+    if not plan.blocks:
+        return "No charging possible before deadline"
+    parts = []
+    for b in plan.blocks:
+        solar_pct = round(100 * b["solar_kwh"] / b["kwh"]) if b["kwh"] > 0 else 0
+        src = f", {solar_pct}% solar" if solar_pct else ""
+        parts.append(
+            f"{_hhmm(b['start'], tz)}–{_hhmm(b['end'], tz)} {b['kwh']:.1f} kWh{src}"
+        )
+    tail = f" · est. cost {plan.cost:.2f}"
+    if plan.shortfall_kwh > ENERGY_EPS_KWH:
+        tail += f" · short {plan.shortfall_kwh:.1f} kWh"
+    text = ", ".join(parts)
+    if len(text) + len(tail) > max_len:
+        text = text[: max_len - len(tail) - 1] + "…"
+    return text + tail
+
+
+def plan_attributes(plan: ChargePlan, tz: tzinfo) -> dict[str, Any]:
+    """Detailed plan for sensor attributes."""
+
+    def iso(dt: datetime) -> str:
+        return dt.astimezone(tz).isoformat()
+
+    return {
+        "deadline": iso(plan.deadline) if plan.deadline else None,
+        "requested_kwh": round(plan.requested_kwh, 2),
+        "planned_kwh": round(plan.planned_kwh, 2),
+        "shortfall_kwh": round(plan.shortfall_kwh, 2),
+        "planned_solar_kwh": round(plan.solar_kwh, 2),
+        "planned_grid_kwh": round(plan.grid_kwh, 2),
+        "estimated_cost": round(plan.cost, 2),
+        "blocks": [
+            {
+                "start": iso(b["start"]),
+                "end": iso(b["end"]),
+                "kwh": round(b["kwh"], 2),
+                "solar_kwh": round(b["solar_kwh"], 2),
+                "grid_kwh": round(b["grid_kwh"], 2),
+                "cost": round(b["cost"], 2),
+            }
+            for b in plan.blocks
+        ],
+        "schedule": [
+            {
+                "start": iso(sp.slot.start),
+                "kw": round(sp.avg_power_kw, 2),
+                "surplus_kw": round(sp.slot.surplus_kw, 2),
+                "import_price": round(sp.slot.import_price, 4),
+                "export_price": round(sp.slot.export_price, 4),
+                **({"estimated_price": True} if sp.slot.estimated_price else {}),
+            }
+            for sp in plan.slots
+        ],
+    }
+
+
+# ----------------------------------------------------------------------
+# Delivered-energy tracking
+# ----------------------------------------------------------------------
+
+# Longest gap over which the applied-current estimate is integrated.
+MAX_ESTIMATE_GAP = timedelta(minutes=15)
+
+
+@dataclass
+class DailyEnergyTracker:
+    """Track energy delivered to the EV within the current daily window.
+
+    Uses a charger energy meter when available (handles counter resets),
+    otherwise integrates the commanded charging power over time.
+    """
+
+    window_start: datetime | None = None
+    delivered_kwh: float = 0.0
+    last_meter_kwh: float | None = None
+    last_update: datetime | None = None
+    last_power_kw: float = 0.0
+
+    def update(
+        self, now: datetime, window_start: datetime, meter_kwh: float | None
+    ) -> None:
+        now_utc = to_utc(now)
+        window_utc = to_utc(window_start)
+        if self.window_start != window_utc:
+            self.window_start = window_utc
+            self.delivered_kwh = 0.0
+
+        if meter_kwh is not None:
+            if self.last_meter_kwh is not None:
+                delta = meter_kwh - self.last_meter_kwh
+                # A drop means the counter was reset (e.g. a new session meter).
+                self.delivered_kwh += delta if delta >= 0 else meter_kwh
+            self.last_meter_kwh = meter_kwh
+        elif self.last_update is not None and now_utc is not None:
+            elapsed = now_utc - self.last_update
+            if timedelta(0) < elapsed <= MAX_ESTIMATE_GAP:
+                hours = elapsed.total_seconds() / 3600
+                self.delivered_kwh += self.last_power_kw * hours
+        self.last_update = now_utc
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "window_start": (
+                self.window_start.isoformat() if self.window_start else None
+            ),
+            "delivered_kwh": self.delivered_kwh,
+            "last_meter_kwh": self.last_meter_kwh,
+            "last_update": self.last_update.isoformat() if self.last_update else None,
+            "last_power_kw": self.last_power_kw,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DailyEnergyTracker:
+        return cls(
+            window_start=to_utc(data.get("window_start")),
+            delivered_kwh=float(data.get("delivered_kwh") or 0.0),
+            last_meter_kwh=(
+                float(data["last_meter_kwh"])
+                if data.get("last_meter_kwh") is not None
+                else None
+            ),
+            last_update=to_utc(data.get("last_update")),
+            last_power_kw=float(data.get("last_power_kw") or 0.0),
+        )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -40,3 +40,7 @@ class EVChargerData:
     charge_hours_needed: float | None = None
     hourly_solar_forecast: list[float] = field(default_factory=list)
     charge_plan: str = ""
+    charge_plan_attributes: dict[str, Any] = field(default_factory=dict)
+    daily_delivered_kwh: float | None = None
+    daily_remaining_kwh: float | None = None
+    planned_cost: float | None = None

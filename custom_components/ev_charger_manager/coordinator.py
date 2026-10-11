@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import contextlib
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .charge_strategy import (
     ChargeDecision,
     strategy_asap,
+    strategy_fixed_daily_amount,
     strategy_minimize_cost,
     strategy_solar_excess,
     strategy_solar_price_blend,
@@ -21,6 +25,9 @@ from .const import (
     CONF_CHARGE_DEADBAND,
     CONF_CHARGE_MODE,
     CONF_CHARGER_CURRENT_ENTITY,
+    CONF_CHARGER_ENERGY_ENTITY,
+    CONF_DAILY_KWH,
+    CONF_DAILY_RESET_HOUR,
     CONF_EV_BATTERY_CAPACITY_ENTITY,
     CONF_EV_SOC_ENTITY,
     CONF_EV_TARGET_SOC_ENTITY,
@@ -38,6 +45,8 @@ from .const import (
     DEFAULT_CHARGE_DEADBAND,
     DEFAULT_CHARGE_HOURS,
     DEFAULT_CHARGE_MODE,
+    DEFAULT_DAILY_KWH,
+    DEFAULT_DAILY_RESET_HOUR,
     DEFAULT_MAX_CURRENT,
     DEFAULT_MIN_CURRENT,
     DEFAULT_PHASES,
@@ -51,12 +60,23 @@ from .const import (
     ChargeMode,
 )
 from .data import EVChargerData
+from .planner import (
+    DailyEnergyTracker,
+    PriceInterval,
+    build_slots,
+    parse_price_series,
+    plan_attributes,
+    plan_energy,
+    plan_summary,
+)
 from .solar import read_solar_forecast, solar_forecast_at
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from .data import EVChargerManagerConfigEntry
+
+STORAGE_VERSION = 1
 
 
 class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
@@ -73,6 +93,26 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             update_interval=timedelta(minutes=UPDATE_INTERVAL_MINUTES),
         )
         self.config_entry = entry
+        self._tracker = DailyEnergyTracker()
+        self._store: Store[dict[str, Any]] = Store(
+            hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
+        )
+
+    async def _async_setup(self) -> None:
+        """Restore the daily energy tracker and align updates to price slots."""
+        stored = await self._store.async_load()
+        if stored:
+            self._tracker = DailyEnergyTracker.from_dict(stored)
+
+        # Re-evaluate right after each quarter-hour so plan slots switch on time.
+        self.config_entry.async_on_unload(
+            async_track_time_change(
+                self.hass, self._async_slot_boundary, minute=(0, 15, 30, 45), second=5
+            )
+        )
+
+    async def _async_slot_boundary(self, _now: datetime) -> None:
+        await self.async_request_refresh()
 
     # ------------------------------------------------------------------
     # Properties derived from config entry (updated when entry reloads)
@@ -203,6 +243,32 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             options={**self.config_entry.options, CONF_BASE_LOAD_W: value},
         )
 
+    @property
+    def charger_energy_entity(self) -> str | None:
+        return self.config_entry.data.get(CONF_CHARGER_ENERGY_ENTITY)
+
+    @property
+    def daily_kwh(self) -> float:
+        return float(self.config_entry.options.get(CONF_DAILY_KWH, DEFAULT_DAILY_KWH))
+
+    @daily_kwh.setter
+    def daily_kwh(self, value: float) -> None:
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={**self.config_entry.options, CONF_DAILY_KWH: value},
+        )
+
+    @property
+    def daily_reset_hour(self) -> int:
+        return int(self.config_entry.options.get(CONF_DAILY_RESET_HOUR, DEFAULT_DAILY_RESET_HOUR))
+
+    @daily_reset_hour.setter
+    def daily_reset_hour(self, value: int) -> None:
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={**self.config_entry.options, CONF_DAILY_RESET_HOUR: value},
+        )
+
     # ------------------------------------------------------------------
     # Options (changeable at runtime via select/number entities)
     # ------------------------------------------------------------------
@@ -236,8 +302,8 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         )
 
         # --- Solar forecast kW for current moment (from Open-Meteo Solar Forecast raw data) ---
+        combined_forecast: dict[datetime, float] = {}
         if self.forecast_solar_entities:
-            combined_forecast: dict = {}
             for entity_id in self.forecast_solar_entities:
                 state = self.hass.states.get(entity_id)
                 if state is None or state.state in ("unavailable", "unknown"):
@@ -301,6 +367,14 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         today_prices: list[float] = []
         tomorrow_prices: list[float] = []
         future_prices: list[float] = []
+        import_series: list[PriceInterval] = []
+        export_series: list[PriceInterval] = []
+        today_start = dt_util.start_of_local_day(now)
+        day_starts = (
+            today_start,
+            dt_util.start_of_local_day(today_start.date() + timedelta(days=1)),
+            dt_util.start_of_local_day(today_start.date() + timedelta(days=2)),
+        )
         if self.nordpool_import_entity:
             np_state = self.hass.states.get(self.nordpool_import_entity)
             if np_state and np_state.state not in ("unavailable", "unknown"):
@@ -314,6 +388,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                     )
 
                 attrs = np_state.attributes
+                import_series = parse_price_series(dict(attrs), *day_starts)
                 today_prices = _extract_price_list(attrs, NORDPOOL_PRICE_ATTRS)
                 tomorrow_prices = _extract_price_list(attrs, NORDPOOL_TOMORROW_ATTRS)
                 result.hourly_prices = today_prices + tomorrow_prices
@@ -334,9 +409,15 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                         self.nordpool_export_entity,
                         np_state.state,
                     )
+                export_series = parse_price_series(dict(np_state.attributes), *day_starts)
 
         # --- EV state of charge / kWh needed ---
         result.ev_kwh_needed = self._compute_ev_kwh_needed()
+
+        # --- Energy delivered within the current daily window ---
+        window_start = _daily_window_start(now, self.daily_reset_hour)
+        self._tracker.update(now, window_start, self._read_charger_energy_kwh())
+        result.daily_delivered_kwh = round(self._tracker.delivered_kwh, 2)
 
         # --- Hours needed at max current ---
         charging_power_kw = (self.max_current * self.phases * self.voltage) / 1000.0
@@ -391,6 +472,47 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 ev_charging_kw=ev_charging_kw,
                 hourly_solar_forecast=result.hourly_solar_forecast or None,
             )
+
+        elif mode == ChargeMode.FIXED_DAILY_AMOUNT:
+            remaining_kwh = max(0.0, self.daily_kwh - self._tracker.delivered_kwh)
+            if result.ev_kwh_needed is not None:
+                remaining_kwh = min(remaining_kwh, result.ev_kwh_needed)
+            result.daily_remaining_kwh = round(remaining_kwh, 2)
+
+            slots = build_slots(
+                now=now,
+                deadline=window_start + timedelta(days=1),
+                import_series=import_series,
+                export_series=export_series,
+                solar_forecast=combined_forecast,
+                base_load_kw=self.base_load_w / 1000.0,
+                current_import_price=result.current_import_price,
+                current_export_price=result.current_export_price,
+            )
+            # Replace the forecast for the current slot with the measured surplus
+            measured_surplus_kw = self._measured_surplus_kw(result)
+            if slots and measured_surplus_kw is not None:
+                slots[0] = replace(slots[0], surplus_kw=measured_surplus_kw)
+
+            watts_per_amp = self.phases * self.voltage
+            plan = plan_energy(
+                slots,
+                remaining_kwh,
+                min_kw=self.min_current * watts_per_amp / 1000.0,
+                max_kw=self.max_current * watts_per_amp / 1000.0,
+            )
+            tz = dt_util.get_default_time_zone()
+            decision = strategy_fixed_daily_amount(
+                plan,
+                min_current=self.min_current,
+                max_current=self.max_current,
+                phases=self.phases,
+                voltage=self.voltage,
+                tz=tz,
+            )
+            result.charge_plan = plan_summary(plan, tz)
+            result.charge_plan_attributes = plan_attributes(plan, tz)
+            result.planned_cost = round(plan.cost, 2)
 
         else:  # MINIMIZE_COST
             hours = (
@@ -456,7 +578,46 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         # --- Apply to charger entity ---
         await self._async_set_charger_current(float(target_amps))
 
+        self._tracker.last_power_kw = target_amps * self.phases * self.voltage / 1000.0
+        await self._store.async_save(self._tracker.as_dict())
+
         return result
+
+    def _measured_surplus_kw(self, result: EVChargerData) -> float | None:
+        """Real-time solar surplus available to the EV, or None without sensors."""
+        if result.grid_export_kw is not None:
+            prev_current = self.data.applied_current if self.data else 0.0
+            ev_charging_kw = (prev_current * self.phases * self.voltage) / 1000.0
+            surplus = result.grid_export_kw + ev_charging_kw
+            # Never exceed PV production (guards against measurement timing skew)
+            if result.solar_power_kw is not None:
+                surplus = min(surplus, result.solar_power_kw)
+        elif result.solar_power_kw is not None:
+            surplus = result.solar_power_kw - self.base_load_w / 1000.0
+        else:
+            return None
+        return max(0.0, surplus)
+
+    def _read_charger_energy_kwh(self) -> float | None:
+        """Read the optional charger energy meter in kWh."""
+        if not self.charger_energy_entity:
+            return None
+        state = self.hass.states.get(self.charger_energy_entity)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return None
+        try:
+            value = float(state.state)
+        except ValueError:
+            LOGGER.warning(
+                "Could not parse energy from %s: %s", self.charger_energy_entity, state.state
+            )
+            return None
+        unit = state.attributes.get("unit_of_measurement", "")
+        if unit == "Wh":
+            return value / 1000.0
+        if unit == "MWh":
+            return value * 1000.0
+        return value
 
     def _compute_ev_kwh_needed(self) -> float | None:
         """Return the kWh still needed to reach the target SoC, or None if data is missing."""
@@ -517,6 +678,15 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 current,
                 exc,
             )
+
+
+def _daily_window_start(now: datetime, reset_hour: int) -> datetime:
+    """Start of the daily window that contains *now* (local time)."""
+    local_now = dt_util.as_local(now)
+    start = local_now.replace(hour=reset_hour, minute=0, second=0, microsecond=0)
+    if start > local_now:
+        start -= timedelta(days=1)
+    return start
 
 
 def _session_plan(

@@ -6,6 +6,7 @@
         "description": "Configure your EV charger entity and current limits.",
         "data": {
           "charger_current_entity": "Charger current entity",
+          "charger_energy_entity": "Charger energy meter (optional)",
           "min_current": "Minimum charge current",
           "max_current": "Maximum charge current",
           "phases": "Number of phases",
@@ -13,6 +14,7 @@
         },
         "data_description": {
           "charger_current_entity": "A number entity that controls the allowed charge current of the charge box (in Amperes).",
+          "charger_energy_entity": "Sensor reporting energy delivered by the charger (kWh or Wh, lifetime or per-session). Used to track how much of the fixed daily amount has been charged; without it, the commanded current is integrated over time.",
           "min_current": "The lowest current the charger accepts (typically 6 A for IEC 61851).",
           "max_current": "The highest current the charger is rated for.",
           "phases": "1 for single-phase, 3 for three-phase installation.",
@@ -74,6 +76,7 @@
         "title": "Reconfigure EV Charger Manager",
         "data": {
           "charger_current_entity": "Charger current entity",
+          "charger_energy_entity": "Charger energy meter",
           "min_current": "Minimum charge current",
           "max_current": "Maximum charge current",
           "phases": "Number of phases",
@@ -101,7 +104,8 @@
           "asap": "ASAP",
           "solar_excess": "Solar excess",
           "minimize_cost": "Minimize cost",
-          "solar_price_blend": "Solar + Price"
+          "solar_price_blend": "Solar + Price",
+          "fixed_daily_amount": "Fixed daily amount"
         }
       }
     },
@@ -135,6 +139,15 @@
       },
       "charge_plan": {
         "name": "Charge session plan"
+      },
+      "daily_delivered": {
+        "name": "Energy charged in daily window"
+      },
+      "daily_remaining": {
+        "name": "Daily amount remaining"
+      },
+      "planned_cost": {
+        "name": "Planned charging cost"
       }
     },
     "number": {
@@ -152,6 +165,12 @@
       },
       "base_load_w": {
         "name": "Household base load"
+      },
+      "daily_kwh": {
+        "name": "Fixed daily amount"
+      },
+      "daily_reset_hour": {
+        "name": "Daily window start hour"
       }
     }
   },

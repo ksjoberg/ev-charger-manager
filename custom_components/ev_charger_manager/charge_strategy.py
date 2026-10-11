@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from datetime import datetime, tzinfo
 
-if TYPE_CHECKING:
-    from datetime import datetime
+from .planner import ENERGY_EPS_KWH, ChargePlan
 
 
 @dataclass
@@ -336,5 +335,72 @@ def strategy_minimize_cost(
         reason=(
             f"Expensive hour – price {current_price:.4f} > threshold {threshold:.4f}; "
             "pausing to save cost"
+        ),
+    )
+
+
+def strategy_fixed_daily_amount(
+    plan: ChargePlan,
+    min_current: float,
+    max_current: float,
+    phases: int,
+    voltage: float,
+    tz: tzinfo,
+) -> ChargeDecision:
+    """Execute the current slot of a fixed-amount charge plan.
+
+    The plan is rebuilt on every update for the energy still missing, so this
+    only has to translate the current slot's planned energy into a current.
+
+    Args:
+        plan: Plan whose first slot is the remainder of the current slot.
+        min_current: Minimum charge current the charger accepts.
+        max_current: Maximum allowed charge current.
+        phases: Number of AC phases.
+        voltage: Phase voltage in V.
+        tz: Time zone used for times in the reason string.
+    """
+    if plan.requested_kwh <= ENERGY_EPS_KWH:
+        return ChargeDecision(
+            target_current=0.0,
+            reason="Fixed daily amount: nothing left to charge in this window",
+        )
+
+    deadline = plan.deadline.astimezone(tz).strftime("%H:%M") if plan.deadline else "?"
+    shortfall = (
+        f"; {plan.shortfall_kwh:.1f} kWh cannot fit before {deadline}"
+        if plan.shortfall_kwh > ENERGY_EPS_KWH
+        else ""
+    )
+    summary = (
+        f"{plan.requested_kwh:.1f} kWh left by {deadline}, "
+        f"est. cost {plan.cost:.2f}{shortfall}"
+    )
+
+    watts_per_amp = phases * voltage
+    min_kw = min_current * watts_per_amp / 1000.0
+    max_kw = max_current * watts_per_amp / 1000.0
+    current = plan.current
+    power_kw = current.charge_power_kw(min_kw, max_kw) if current else 0.0
+
+    if power_kw <= 0 or current is None:
+        nxt = plan.next_charge()
+        when = (
+            f"next charge {nxt.slot.start.astimezone(tz).strftime('%H:%M')}"
+            if nxt
+            else "no charging planned"
+        )
+        return ChargeDecision(
+            target_current=0.0,
+            reason=f"Fixed daily: waiting – {when}; {summary}",
+        )
+
+    amps = min(max_current, power_kw * 1000.0 / watts_per_amp)
+    return ChargeDecision(
+        target_current=round(amps, 1),
+        reason=(
+            f"Fixed daily: {current.energy_kwh:.2f} kWh this slot "
+            f"({current.solar_kwh:.2f} solar / {current.grid_kwh:.2f} grid) "
+            f"→ {amps:.1f} A; {summary}"
         ),
     )

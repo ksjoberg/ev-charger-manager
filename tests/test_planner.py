@@ -1,0 +1,279 @@
+"""Tests for the Fixed Daily Amount planner and strategy."""
+
+import random
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from ev_charger_manager_pure import charge_strategy as S
+from ev_charger_manager_pure import planner as P
+
+TZ = ZoneInfo("Europe/Stockholm")
+V, PH = 230, 1
+MIN_A, MAX_A = 6, 10
+MIN_KW, MAX_KW = MIN_A * V * PH / 1000, MAX_A * V * PH / 1000
+BASE_KW = 0.5
+DAY = datetime(2026, 10, 12, tzinfo=TZ)
+
+
+def sun(h):
+    """Peak 4 kW at 13:00."""
+    return max(0.0, 4.0 * (1 - abs(h - 13) / 5))
+
+
+def weak_sun(h):
+    """Peak 1.5 kW -> surplus 1.0 kW, below the 1.38 kW minimum."""
+    return max(0.0, 1.5 * (1 - abs(h - 13) / 4))
+
+
+def cheap_night(h):
+    return 0.2 if h < 6 else (0.5 if h < 17 else 1.5)
+
+
+def pricey_noon(h):
+    return 0.1 if h < 6 else (2.0 if 9 <= h < 17 else 1.0)
+
+
+def make_day(spot_fn, solar_fn, start=DAY, tax=1.0):
+    """15-min import (spot + tax) and export (spot) series plus a solar forecast."""
+    imp, exp, solar = [], [], {}
+    for q in range(96):
+        t = start.astimezone(UTC) + timedelta(minutes=15 * q)
+        local = t.astimezone(TZ)
+        spot = spot_fn(local.hour + local.minute / 60)
+        imp.append(P.PriceInterval(t, t + timedelta(minutes=15), spot + tax))
+        exp.append(P.PriceInterval(t, t + timedelta(minutes=15), spot))
+        solar[t] = solar_fn(local.hour + local.minute / 60)
+    return imp, exp, solar
+
+
+def plan_day(spot_fn, solar_fn, kwh, now_h=0.0):
+    imp, exp, solar = make_day(spot_fn, solar_fn)
+    slots = P.build_slots(
+        DAY + timedelta(hours=now_h), DAY + timedelta(days=1), imp, exp, solar, BASE_KW
+    )
+    return P.plan_energy(slots, kwh, MIN_KW, MAX_KW)
+
+
+# ----------------------------------------------------------------------
+# Planning scenarios
+# ----------------------------------------------------------------------
+
+
+def test_prefers_solar_when_export_price_below_night_import():
+    plan = plan_day(cheap_night, sun, 10)
+    assert plan.planned_kwh == pytest.approx(10)
+    assert plan.grid_kwh < 0.5
+
+
+def test_exports_solar_and_imports_at_night_when_cheaper():
+    plan = plan_day(pricey_noon, sun, 10)
+    assert plan.planned_kwh == pytest.approx(10)
+    assert plan.solar_kwh < 0.5
+    assert all(b["start"].astimezone(TZ).hour < 6 for b in plan.blocks)
+
+
+def test_infeasible_amount_reports_shortfall():
+    plan = plan_day(cheap_night, sun, 100)
+    assert plan.planned_kwh == pytest.approx(MAX_KW * 24)
+    assert plan.shortfall_kwh == pytest.approx(100 - MAX_KW * 24)
+
+
+def test_nothing_requested_stops_charging():
+    plan = plan_day(cheap_night, sun, 0)
+    decision = S.strategy_fixed_daily_amount(plan, MIN_A, MAX_A, PH, V, TZ)
+    assert decision.target_current == 0
+    assert P.plan_summary(plan, TZ) == "Daily amount reached"
+
+
+def test_waits_until_planned_slot():
+    plan = plan_day(cheap_night, sun, 10)
+    decision = S.strategy_fixed_daily_amount(plan, MIN_A, MAX_A, PH, V, TZ)
+    assert decision.target_current == 0
+    assert "next charge 10:30" in decision.reason
+
+
+def test_partial_slot_is_front_loaded_at_min_current():
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    slot = P.PlanSlot(t0, t0 + timedelta(hours=1), 1.0, 0.1, 0.0)
+    plan = P.plan_energy([slot], 0.5, MIN_KW, MAX_KW)
+    decision = S.strategy_fixed_daily_amount(plan, MIN_A, MAX_A, PH, V, TZ)
+    assert decision.target_current == MIN_A
+
+
+def _hull_cost(slot, e):
+    """Brute-force cost of e kWh in a slot, running at power q for part of it."""
+    h = slot.hours
+    qs = [MIN_KW + (MAX_KW - MIN_KW) * i / 200 for i in range(201)]
+    qs += [x for x in (e / h, slot.surplus_kw) if MIN_KW <= x <= MAX_KW]
+    best = float("inf")
+    for q in qs:
+        duty = e / (q * h)
+        if duty > 1 + 1e-9:
+            continue
+        s = min(q, slot.surplus_kw)
+        best = min(best, duty * h * (s * slot.export_price + (q - s) * slot.import_price))
+    return best
+
+
+def test_greedy_plan_is_optimal_against_random_allocations():
+    rng = random.Random(1)
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    for _ in range(100):
+        n = rng.randint(1, 6)
+        slots = []
+        for i in range(n):
+            imp = rng.uniform(0.5, 3)
+            slots.append(
+                P.PlanSlot(
+                    t0 + timedelta(hours=i),
+                    t0 + timedelta(hours=i + 1),
+                    imp,
+                    rng.uniform(0, imp),
+                    rng.choice([0.0, rng.uniform(0, 3)]),
+                )
+            )
+        energy = rng.uniform(0, MAX_KW * n)
+        plan = P.plan_energy(slots, energy, MIN_KW, MAX_KW)
+        assert plan.cost == pytest.approx(
+            sum(_hull_cost(sp.slot, sp.energy_kwh) for sp in plan.slots), abs=1e-3
+        )
+        for _ in range(100):
+            w = [rng.random() ** 3 for _ in slots]
+            alloc = [min(MAX_KW, energy * x / sum(w)) for x in w]
+            short = energy - sum(alloc)
+            for i in range(n):
+                add = min(MAX_KW - alloc[i], short)
+                alloc[i] += add
+                short -= add
+            other = sum(_hull_cost(s, a) for s, a in zip(slots, alloc, strict=True))
+            assert plan.cost <= other + 1e-6
+
+
+# ----------------------------------------------------------------------
+# Closed loop: re-plan every 5 minutes and apply whole amperes
+# ----------------------------------------------------------------------
+
+
+def simulate(spot_fn, solar_fn, kwh, forecast_scale=1.0):
+    imp, exp, solar = make_day(spot_fn, solar_fn)
+    forecast = {t: v * forecast_scale for t, v in solar.items()}
+    actual = sorted(solar.items())
+    delivered = cost = 0.0
+    t = DAY
+    while t < DAY + timedelta(days=1):
+        slots = P.build_slots(t, DAY + timedelta(days=1), imp, exp, forecast, BASE_KW)
+        surplus = max(0.0, P.solar_kw_between(actual, slots[0].start, slots[0].end) - BASE_KW)
+        slots[0] = replace(slots[0], surplus_kw=surplus)
+        plan = P.plan_energy(slots, max(0.0, kwh - delivered), MIN_KW, MAX_KW)
+        decision = S.strategy_fixed_daily_amount(plan, MIN_A, MAX_A, PH, V, TZ)
+        kw = round(decision.target_current) * V * PH / 1000
+        s = min(kw, surplus)
+        cost += (s * slots[0].export_price + (kw - s) * slots[0].import_price) * 5 / 60
+        delivered += kw * 5 / 60
+        t += timedelta(minutes=5)
+    return delivered, cost
+
+
+@pytest.mark.parametrize(
+    ("spot_fn", "solar_fn", "forecast_scale"),
+    [
+        (cheap_night, sun, 1.0),
+        (cheap_night, sun, 1.5),
+        (pricey_noon, sun, 1.0),
+        (cheap_night, weak_sun, 1.0),
+    ],
+)
+def test_closed_loop_delivers_amount_near_plan_cost(spot_fn, solar_fn, forecast_scale):
+    ideal = plan_day(spot_fn, solar_fn, 10)
+    delivered, cost = simulate(spot_fn, solar_fn, 10, forecast_scale)
+    assert delivered == pytest.approx(10, abs=0.3)
+    assert cost == pytest.approx(ideal.cost, rel=0.02)
+
+
+# ----------------------------------------------------------------------
+# Input parsing
+# ----------------------------------------------------------------------
+
+DST_DAY = datetime(2026, 10, 25, tzinfo=TZ)  # 25 h day
+DST_NEXT = datetime(2026, 10, 26, tzinfo=TZ)
+DST_AFTER = datetime(2026, 10, 27, tzinfo=TZ)
+
+
+def test_plain_price_lists_follow_dst_day_length():
+    series = P.parse_price_series(
+        {"today": list(range(100)), "tomorrow": [1.0] * 96}, DST_DAY, DST_NEXT, DST_AFTER
+    )
+    assert len(series) == 196
+    assert series[99].end == DST_NEXT.astimezone(UTC)
+    assert series[100].start == DST_NEXT.astimezone(UTC)
+
+
+def test_raw_price_lists_are_preferred():
+    start = DST_DAY.astimezone(UTC)
+    raw = [
+        {
+            "start": (start + timedelta(hours=i)).isoformat(),
+            "end": (start + timedelta(hours=i + 1)).isoformat(),
+            "value": i,
+        }
+        for i in range(25)
+    ]
+    series = P.parse_price_series(
+        {"raw_today": raw, "raw_tomorrow": [], "today": [0] * 25},
+        DST_DAY,
+        DST_NEXT,
+        DST_AFTER,
+    )
+    assert len(series) == 25
+    assert series[3].value == 3
+
+
+def test_missing_values_keep_alignment():
+    series = P.parse_price_series(
+        {"today": [None] * 4 + [1.0] * 92, "tomorrow": None},
+        DAY,
+        DAY + timedelta(days=1),
+        DAY + timedelta(days=2),
+    )
+    assert len(series) == 92
+    assert series[0].start == (DAY + timedelta(hours=1)).astimezone(UTC)
+
+
+def test_unpublished_slots_use_previous_day_prices():
+    imp, exp, solar = make_day(cheap_night, sun)
+    slots = P.build_slots(
+        DAY + timedelta(hours=20), DAY + timedelta(days=1, hours=7), imp, exp, solar, BASE_KW
+    )
+    estimated = [s for s in slots if s.estimated_price]
+    assert len(estimated) == 28
+    assert estimated[8].import_price == pytest.approx(1.2)
+
+
+# ----------------------------------------------------------------------
+# Delivered-energy tracking
+# ----------------------------------------------------------------------
+
+
+def test_tracker_meter_handles_counter_reset_and_window_rollover():
+    tr = P.DailyEnergyTracker()
+    tr.update(DAY + timedelta(hours=1), DAY, 100.0)
+    tr.update(DAY + timedelta(hours=2), DAY, 102.5)
+    tr.update(DAY + timedelta(hours=3), DAY, 1.0)  # session counter reset
+    assert tr.delivered_kwh == pytest.approx(3.5)
+    assert P.DailyEnergyTracker.from_dict(tr.as_dict()) == tr
+    tomorrow = DAY + timedelta(days=1)
+    tr.update(tomorrow + timedelta(minutes=1), tomorrow, 1.5)
+    assert tr.delivered_kwh == pytest.approx(0.5)
+
+
+def test_tracker_integrates_power_without_meter():
+    tr = P.DailyEnergyTracker()
+    tr.update(DAY, DAY, None)
+    tr.last_power_kw = 2.3
+    tr.update(DAY + timedelta(minutes=5), DAY, None)
+    assert tr.delivered_kwh == pytest.approx(2.3 * 5 / 60)
+    tr.update(DAY + timedelta(hours=2), DAY, None)  # gap too long, ignored
+    assert tr.delivered_kwh == pytest.approx(2.3 * 5 / 60)

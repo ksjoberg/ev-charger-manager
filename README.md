@@ -8,6 +8,7 @@ A Home Assistant custom integration that controls an EV charge box by adjusting 
   - **ASAP** – always charges at the configured maximum current
   - **Solar excess** – sets the current proportional to estimated (or measured) solar surplus; pauses when there is insufficient excess
   - **Minimize cost** – charges only during the cheapest *N* hours of the day based on Nordpool spot prices; pauses during expensive hours
+  - **Fixed daily amount** – plans and executes the cheapest way to charge a configured number of kWh per day, combining solar forecast, import/export prices and household base load
 - **Solar estimation** from sun geometry (latitude/longitude) and weather conditions — no extra hardware required. When a grid-power sensor is connected, measured solar export is used instead of the estimate.
 - **Nordpool compatibility** — works with both the unofficial [Nordpool HACS integration](https://github.com/custom-components/nordpool) and the official Nordpool integration; any sensor whose state is the current spot price per kWh is accepted.
 - **Runtime-adjustable current limits** via `number` entities — no need to re-run the config flow to change the operating range.
@@ -25,6 +26,12 @@ A Home Assistant custom integration that controls an EV charge box by adjusting 
 | Estimated solar power | `sensor` | Estimated PV output in kW |
 | Current spot price | `sensor` | Price read from the Nordpool sensor |
 | Charge decision reason | `sensor` | Human-readable explanation of the last decision |
+| Fixed daily amount | `number` | kWh to charge per daily window (Fixed daily amount mode) |
+| Daily window start hour | `number` | Local hour when the daily window starts; the amount is due before the next one |
+| Charge session plan | `sensor` | Summary of the planned charging blocks; full per-slot schedule in attributes |
+| Energy charged in daily window | `sensor` | kWh delivered since the window started |
+| Daily amount remaining | `sensor` | kWh still planned in this window (capped by kWh to target SoC) |
+| Planned charging cost | `sensor` | Estimated cost of the remaining plan |
 
 ## Requirements
 
@@ -89,3 +96,20 @@ If a grid-power sensor is configured, the measured grid export replaces the sola
 
 ### Minimize cost
 Collects hourly prices from today and tomorrow (when available). Charges at `max_current` during the *N* cheapest hours and pauses during the rest, where *N* is the **Cheap hours needed** number entity. If no price data is available, falls back to charging at `max_current`.
+
+### Fixed daily amount
+Charges a fixed number of kWh (the **Fixed daily amount** number entity) within each daily window at the lowest estimated cost. The window starts at the **Daily window start hour** (default 00:00, i.e. the calendar day) and the amount is due before the next window starts. The amount is capped by the kWh still needed to reach the EV's target SoC when the EV battery entities are configured.
+
+**Cost model.** The window is split into the price slots of the import price sensor (15 min or 1 h). For each slot:
+
+- solar surplus = forecast PV production − household base load
+- charging power covered by the surplus costs the **export price** (the revenue lost by not exporting it)
+- charging power beyond the surplus costs the **import price**
+
+Self-consuming solar is therefore always preferred within a slot, but solar is exported when importing in a later slot is cheaper, e.g. when the midday export price is above the night-time all-in import price.
+
+**Planning.** The charger can only run between the minimum and maximum current, but it can be paused for part of a slot. The planner builds each slot's cost curve (the convex hull of the cost over "off" and `min`–`max` current) and fills the required kWh with the cheapest marginal kWh across all slots. This greedy fill is cost-optimal for this model. Slots past the published prices use the price from 24 h earlier until real prices arrive.
+
+**Execution.** The plan is rebuilt every 5 minutes and at every quarter-hour for the kWh still missing. For the current slot, the measured surplus (from the grid and PV sensors, when configured) replaces the forecast. The current slot's planned energy is converted to a charge current; when that is below the minimum current, the slot is charged at the minimum current and stopped once its share is delivered.
+
+**Delivered energy** is read from the optional *Charger energy meter* sensor (lifetime or per-session counters both work). Without a meter, the commanded current is integrated over time, which overestimates if the car does not draw the full allowed current. The count is persisted across restarts.
