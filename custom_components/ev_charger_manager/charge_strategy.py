@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .planner import ENERGY_EPS_KWH, plan_summary
+from .planner import ENERGY_EPS_KWH
 
 if TYPE_CHECKING:
     from datetime import datetime, tzinfo
@@ -348,35 +348,48 @@ def _hhmm(dt: datetime, tz: tzinfo) -> str:
     return dt.astimezone(tz).strftime("%H:%M")
 
 
+def _span(plan: ChargePlan, tz: tzinfo) -> str:
+    """Time span from the first to the last planned charging block."""
+    if not plan.blocks:
+        return ""
+    return f" {_hhmm(plan.blocks[0]['start'], tz)}–{_hhmm(plan.blocks[-1]['end'], tz)}"
+
+
 def _today_text(plan: ChargePlan, tz: tzinfo) -> str:
-    """Describe the rest of the current window's plan."""
-    if plan.requested_kwh <= ENERGY_EPS_KWH:
-        return "Today: daily amount reached"
-    deadline = _hhmm(plan.deadline, tz) if plan.deadline else "?"
-    return (
-        f"Today: {plan.requested_kwh:.1f} kWh left by {deadline} – "
-        f"{plan_summary(plan, tz, max_len=10_000)}"
-    )
+    """Summarise the rest of the current window's plan."""
+    parts = []
+    if plan.planned_kwh > ENERGY_EPS_KWH:
+        parts.append(
+            f"{plan.planned_kwh:.1f} kWh{_span(plan, tz)}, est. {plan.cost:.2f}"
+        )
+    if plan.deferred_kwh > ENERGY_EPS_KWH:
+        saving = plan.avoided_cost - plan.deferred_cost
+        parts.append(
+            f"{plan.deferred_kwh:.1f} kWh deferred to tomorrow, saves {saving:.2f}"
+        )
+    if plan.shortfall_kwh > ENERGY_EPS_KWH:
+        deadline = _hhmm(plan.deadline, tz) if plan.deadline else "deadline"
+        parts.append(f"{plan.shortfall_kwh:.1f} kWh won't fit before {deadline}")
+    return "Today: " + "; ".join(parts)
 
 
 def _tomorrow_text(
     next_plan: ChargePlan | None, window_end: datetime, carried_kwh: float, tz: tzinfo
 ) -> str:
-    """Describe the next window's plan over its published prices."""
+    """Summarise the next window's plan over its published prices."""
     if next_plan is None or not next_plan.slots:
         return "Tomorrow: prices not published yet"
     carried = (
-        f" incl. {carried_kwh:.1f} kWh deferred" if carried_kwh > ENERGY_EPS_KWH else ""
+        f" (incl. {carried_kwh:.1f} deferred)" if carried_kwh > ENERGY_EPS_KWH else ""
     )
     coverage = (
-        f" (prices until {_hhmm(next_plan.deadline, tz)})"
+        f", prices until {_hhmm(next_plan.deadline, tz)}"
         if next_plan.deadline and next_plan.deadline < window_end
         else ""
     )
     return (
-        f"Tomorrow: {next_plan.requested_kwh:.1f} kWh{carried} by "
-        f"{_hhmm(window_end, tz)} – {plan_summary(next_plan, tz, max_len=10_000)}"
-        f"{coverage}"
+        f"Tomorrow: {next_plan.requested_kwh:.1f} kWh{carried}"
+        f"{_span(next_plan, tz)}, est. {next_plan.cost:.2f}{coverage}"
     )
 
 
@@ -410,17 +423,19 @@ def strategy_fixed_daily_amount(
             also describes the next window's plan.
 
     """
-    parts = [_today_text(plan, tz)]
-    if next_window_end is not None:
-        parts.append(_tomorrow_text(next_plan, next_window_end, plan.deferred_kwh, tz))
-    outlook = ". ".join(parts)
+    tomorrow = (
+        f". {_tomorrow_text(next_plan, next_window_end, plan.deferred_kwh, tz)}"
+        if next_window_end is not None
+        else ""
+    )
 
     if plan.requested_kwh <= ENERGY_EPS_KWH:
         return ChargeDecision(
             target_current=0.0,
-            reason=f"Fixed daily: nothing left to charge in this window. {outlook}",
+            reason=f"Fixed daily: daily amount reached{tomorrow}",
         )
 
+    outlook = f"{_today_text(plan, tz)}{tomorrow}"
     watts_per_amp = phases * voltage
     min_kw = min_current * watts_per_amp / 1000.0
     max_kw = max_current * watts_per_amp / 1000.0
@@ -440,9 +455,5 @@ def strategy_fixed_daily_amount(
     amps = min(max_current, power_kw * 1000.0 / watts_per_amp)
     return ChargeDecision(
         target_current=round(amps, 1),
-        reason=(
-            f"Fixed daily: charging {amps:.1f} A, {current.energy_kwh:.2f} kWh "
-            f"this slot ({current.solar_kwh:.2f} solar / "
-            f"{current.grid_kwh:.2f} grid). {outlook}"
-        ),
+        reason=f"Fixed daily: charging {amps:.0f} A. {outlook}",
     )

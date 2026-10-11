@@ -731,6 +731,32 @@ def plan_attributes(plan: ChargePlan, tz: tzinfo) -> dict[str, Any]:
     }
 
 
+def plan_slots_raw(
+    plan: ChargePlan | None, tz: tzinfo, watts_per_amp: float
+) -> list[dict[str, Any]]:
+    """
+    Per-slot plan in Nordpool ``raw_*`` style, for charting.
+
+    ``current`` is the current commanded during the slot; slots needing less
+    than the minimum power run at the minimum current for part of the slot.
+    """
+    if plan is None or watts_per_amp <= 0:
+        return []
+    return [
+        {
+            "start": sp.slot.start.astimezone(tz).isoformat(),
+            "end": sp.slot.end.astimezone(tz).isoformat(),
+            "kwh": round(sp.energy_kwh, 3),
+            "solar_kwh": round(sp.solar_kwh, 3),
+            "current": round(
+                sp.charge_power_kw(plan.min_kw, plan.max_kw) * 1000 / watts_per_amp
+            ),
+            "price": round(sp.slot.import_price, 4),
+        }
+        for sp in plan.slots
+    ]
+
+
 # ----------------------------------------------------------------------
 # Delivered-energy tracking
 # ----------------------------------------------------------------------

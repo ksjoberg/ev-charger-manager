@@ -61,8 +61,7 @@ SENSOR_DESCRIPTIONS: tuple[EVChargerSensorDescription, ...] = (
         translation_key="charge_reason",
         icon="mdi:information-outline",
         value_fn=lambda d: _truncate_state(d.charge_reason),
-        # The state is capped at 255 characters; the attribute keeps it all
-        attrs_fn=lambda d: {"message": d.charge_reason} if d.charge_reason else None,
+        attrs_fn=lambda d: d.charge_reason_attributes,
     ),
     EVChargerSensorDescription(
         key="ev_kwh_needed",
@@ -222,8 +221,10 @@ class EVChargerManagerSensor(EVChargerManagerEntity, SensorEntity):
     """A sensor that reads a computed value from the coordinator data."""
 
     entity_description: EVChargerSensorDescription
-    # Detailed plan attributes and the full reason are large and change often
-    _unrecorded_attributes = frozenset({"blocks", "schedule", "message"})
+    # Detailed plan attributes are large and change every update
+    _unrecorded_attributes = frozenset(
+        {"blocks", "schedule", "raw_today", "raw_tomorrow"}
+    )
 
     def __init__(
         self,

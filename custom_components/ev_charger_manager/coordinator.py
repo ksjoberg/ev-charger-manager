@@ -70,6 +70,7 @@ from .planner import (
     parse_price_series,
     plan_attributes,
     plan_energy,
+    plan_slots_raw,
     plan_summary,
 )
 from .solar import read_solar_forecast, solar_forecast_at
@@ -601,6 +602,11 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 "carried_over_kwh": round(self._tracker.carry_over_kwh, 2),
             }
             result.planned_cost = round(plan.cost, 2)
+            result.charge_reason_attributes = {
+                "raw_today": plan_slots_raw(plan, tz, watts_per_amp),
+                "raw_tomorrow": plan_slots_raw(next_plan, tz, watts_per_amp),
+                "tomorrow_valid": next_plan is not None,
+            }
 
         else:  # MINIMIZE_COST
             hours = (

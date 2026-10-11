@@ -35,6 +35,7 @@ class EVChargerData:
     hourly_prices: list[float] = field(default_factory=list)
     applied_current: float = 0.0
     charge_reason: str = ""
+    charge_reason_attributes: dict[str, Any] = field(default_factory=dict)
     grid_export_kw: float | None = None
     ev_kwh_needed: float | None = None
     charge_hours_needed: float | None = None
