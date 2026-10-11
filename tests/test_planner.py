@@ -534,5 +534,16 @@ def test_raw_slots_report_energy_and_current_per_slot():
     assert [r["kwh"] for r in raw[-3:]] == [0, 2.3, 0.7]
     # A slot below minimum power runs at the minimum current for part of it
     assert [r["current"] for r in raw[-3:]] == [0, MAX_A, MIN_A]
-    assert raw[-1]["price"] == 1.0
+    assert [r["import_kwh"] for r in raw[-3:]] == [0, 2.3, 0.7]
+    assert raw[-1]["import_price"] == 1.0
+    assert raw[-1]["export_price"] == 0.3
+    assert "estimated_price" not in raw[-1]
     assert P.plan_slots_raw(None, TZ, V * PH) == []
+
+
+def test_raw_slots_split_solar_surplus_and_import():
+    plan = P.plan_energy(hourly(T14, [2.0], [1.0]), MAX_KW, MIN_KW, MAX_KW)
+    raw = P.plan_slots_raw(plan, TZ, V * PH)
+    assert raw[0]["kwh"] == pytest.approx(MAX_KW)
+    assert raw[0]["solar_kwh"] == pytest.approx(1.0)
+    assert raw[0]["import_kwh"] == pytest.approx(MAX_KW - 1.0)
