@@ -11,7 +11,12 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfElectricCurrent, UnitOfEnergy, UnitOfPower
+from homeassistant.const import (
+    MAX_LENGTH_STATE_STATE,
+    UnitOfElectricCurrent,
+    UnitOfEnergy,
+    UnitOfPower,
+)
 
 from .entity import EVChargerManagerEntity
 
@@ -31,6 +36,15 @@ class EVChargerSensorDescription(SensorEntityDescription):
     attrs_fn: object = None  # Callable[[EVChargerData], dict[str, Any]] | None
 
 
+def _truncate_state(text: str) -> str | None:
+    """Shorten text to the maximum state length, marking the cut."""
+    if not text:
+        return None
+    if len(text) <= MAX_LENGTH_STATE_STATE:
+        return text
+    return text[: MAX_LENGTH_STATE_STATE - 1] + "…"
+
+
 # Always-on sensors
 SENSOR_DESCRIPTIONS: tuple[EVChargerSensorDescription, ...] = (
     EVChargerSensorDescription(
@@ -46,7 +60,9 @@ SENSOR_DESCRIPTIONS: tuple[EVChargerSensorDescription, ...] = (
         key="charge_reason",
         translation_key="charge_reason",
         icon="mdi:information-outline",
-        value_fn=lambda d: d.charge_reason,
+        value_fn=lambda d: _truncate_state(d.charge_reason),
+        # The state is capped at 255 characters; the attribute keeps it all
+        attrs_fn=lambda d: {"message": d.charge_reason} if d.charge_reason else None,
     ),
     EVChargerSensorDescription(
         key="ev_kwh_needed",
@@ -206,8 +222,8 @@ class EVChargerManagerSensor(EVChargerManagerEntity, SensorEntity):
     """A sensor that reads a computed value from the coordinator data."""
 
     entity_description: EVChargerSensorDescription
-    # Detailed plan attributes are large and change every update
-    _unrecorded_attributes = frozenset({"blocks", "schedule"})
+    # Detailed plan attributes and the full reason are large and change often
+    _unrecorded_attributes = frozenset({"blocks", "schedule", "message"})
 
     def __init__(
         self,
