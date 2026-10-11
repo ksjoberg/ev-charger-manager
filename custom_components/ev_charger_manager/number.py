@@ -186,13 +186,16 @@ class EVChargerDailyKwhNumber(EVChargerManagerEntity, NumberEntity):
     _attr_translation_key = "daily_kwh"
 
     def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        """Initialize the number entity."""
         super().__init__(coordinator, unique_id_suffix="daily_kwh")
 
     @property
     def native_value(self) -> float:
+        """Return the current value."""
         return float(self.coordinator.daily_kwh)
 
     async def async_set_native_value(self, value: float) -> None:
+        """Store the new value and refresh the coordinator."""
         self.coordinator.daily_kwh = round(float(value), 1)
         await self.coordinator.async_request_refresh()
 
@@ -208,14 +211,17 @@ class EVChargerDailyResetHourNumber(EVChargerManagerEntity, NumberEntity):
     _attr_translation_key = "daily_reset_hour"
 
     def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        """Initialize the number entity."""
         super().__init__(coordinator, unique_id_suffix="daily_reset_hour")
 
     @property
     def native_value(self) -> float:
+        """Return the current value."""
         return float(self.coordinator.daily_reset_hour)
 
     async def async_set_native_value(self, value: float) -> None:
-        self.coordinator.daily_reset_hour = int(round(value))
+        """Store the new value and refresh the coordinator."""
+        self.coordinator.daily_reset_hour = round(value)
         await self.coordinator.async_request_refresh()
 
 
@@ -231,12 +237,15 @@ class EVChargerDeferMinSavingNumber(EVChargerManagerEntity, NumberEntity):
     _attr_translation_key = "defer_min_saving"
 
     def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        """Initialize the number entity."""
         super().__init__(coordinator, unique_id_suffix="defer_min_saving")
 
     @property
     def native_value(self) -> float:
+        """Return the current value."""
         return float(self.coordinator.defer_min_saving)
 
     async def async_set_native_value(self, value: float) -> None:
+        """Store the new value and refresh the coordinator."""
         self.coordinator.defer_min_saving = float(round(value))
         await self.coordinator.async_request_refresh()

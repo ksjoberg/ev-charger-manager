@@ -84,7 +84,9 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                         selector.EntitySelectorConfig(domain="number")
                     ),
                     vol.Optional(CONF_CHARGER_ENERGY_ENTITY): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="sensor", device_class="energy")
+                        selector.EntitySelectorConfig(
+                            domain="sensor", device_class="energy"
+                        )
                     ),
                     vol.Optional(
                         CONF_MIN_CURRENT,
@@ -398,7 +400,9 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         CONF_CHARGER_ENERGY_ENTITY,
                         default=data.get(CONF_CHARGER_ENERGY_ENTITY, ""),
                     ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="sensor", device_class="energy")
+                        selector.EntitySelectorConfig(
+                            domain="sensor", device_class="energy"
+                        )
                     ),
                     vol.Optional(
                         CONF_MIN_CURRENT,

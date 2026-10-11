@@ -1,4 +1,5 @@
-"""Test setup: load the integration's pure-Python modules without Home Assistant.
+"""
+Test setup: load the integration's pure-Python modules without Home Assistant.
 
 The package ``__init__`` imports Home Assistant, so the planner and strategy
 modules are loaded through a stand-in package that only points at the source

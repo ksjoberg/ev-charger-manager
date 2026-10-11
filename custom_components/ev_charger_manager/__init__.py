@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 from homeassistant.helpers.storage import Store
 from homeassistant.loader import async_get_loaded_integration
 
-from .const import DOMAIN, LOGGER
+from .const import DOMAIN
 from .coordinator import STORAGE_VERSION, EVChargerManagerCoordinator
 from .data import EVChargerManagerRuntimeData
 

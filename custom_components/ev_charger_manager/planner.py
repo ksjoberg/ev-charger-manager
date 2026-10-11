@@ -1,4 +1,5 @@
-"""Cost-optimal planner for delivering a fixed amount of energy to the EV.
+"""
+Cost-optimal planner for delivering a fixed amount of energy to the EV.
 
 The planning horizon is split into price slots (typically 15 min or 1 h, as
 published by Nordpool).  For every slot we know:
@@ -78,7 +79,8 @@ class PriceInterval:
 def _parse_price_list(
     raw: Any, day_start: datetime, day_end: datetime
 ) -> list[PriceInterval]:
-    """Parse one day's price list.
+    """
+    Parse one day's price list.
 
     Accepts either Nordpool ``raw_*`` style dicts (``start``/``end``/``value``)
     or plain lists of numbers spread evenly over the day.
@@ -96,7 +98,7 @@ def _parse_price_list(
                 continue
             try:
                 parsed.append((start, end, float(value)))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
         parsed.sort(key=lambda p: p[0])
         default_len = (day_end - day_start) / max(1, len(raw))
@@ -116,7 +118,7 @@ def _parse_price_list(
             continue  # keep index alignment for missing values
         try:
             price = float(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         start = day_start + i * slot_len
         intervals.append(PriceInterval(start, start + slot_len, price))
@@ -129,7 +131,8 @@ def parse_price_series(
     tomorrow_start: datetime,
     day_after_start: datetime,
 ) -> list[PriceInterval]:
-    """Extract today's and tomorrow's prices as timestamped intervals (UTC).
+    """
+    Extract today's and tomorrow's prices as timestamped intervals (UTC).
 
     The day boundaries are local midnights; they are only used for plain number
     lists that carry no timestamps.
@@ -177,7 +180,8 @@ def _interval_at(series: list[PriceInterval], t: datetime) -> PriceInterval | No
 def solar_kw_between(
     samples: list[tuple[datetime, float]], start: datetime, end: datetime
 ) -> float:
-    """Average forecast PV power (kW) for [start, end).
+    """
+    Average forecast PV power (kW) for [start, end).
 
     *samples* must be sorted by time.  Uses the mean of samples inside the
     interval; falls back to linear interpolation at the midpoint.
@@ -224,10 +228,11 @@ class PlanSlot:
 
     @property
     def hours(self) -> float:
+        """Return the slot length in hours."""
         return max(0.0, (self.end - self.start).total_seconds() / 3600.0)
 
 
-def build_slots(  # noqa: PLR0913
+def build_slots(
     now: datetime,
     deadline: datetime,
     import_series: list[PriceInterval],
@@ -237,7 +242,8 @@ def build_slots(  # noqa: PLR0913
     current_import_price: float | None = None,
     current_export_price: float | None = None,
 ) -> list[PlanSlot]:
-    """Split [now, deadline) into price slots.
+    """
+    Split [now, deadline) into price slots.
 
     Slots beyond the published prices use the price of the same time 24 h
     earlier (persistence forecast) and are flagged as estimated.  The first
@@ -322,7 +328,8 @@ def build_slots(  # noqa: PLR0913
 def _slot_segments(
     slot: PlanSlot, min_kw: float, max_kw: float
 ) -> list[tuple[float, float]]:
-    """Return the slot's marginal-cost curve as (price_per_kwh, kwh) segments.
+    """
+    Return the slot's marginal-cost curve as (price_per_kwh, kwh) segments.
 
     Segments are in the order they must be consumed and have non-decreasing
     prices (lower convex hull), so a global greedy fill is optimal.
@@ -383,11 +390,13 @@ class SlotPlan:
 
     @property
     def avg_power_kw(self) -> float:
+        """Return the average charging power over the slot."""
         hours = self.slot.hours
         return self.energy_kwh / hours if hours > 0 else 0.0
 
     def charge_power_kw(self, min_kw: float, max_kw: float) -> float:
-        """Power to command now so the slot's energy is delivered.
+        """
+        Power to command now so the slot's energy is delivered.
 
         Below min_kw the slot is front-loaded at min_kw; the next re-plan
         stops charging once the slot's share has been delivered.
@@ -418,10 +427,12 @@ class ChargePlan:
 
     @property
     def shortfall_kwh(self) -> float:
+        """Return the requested energy neither planned nor deferred."""
         return max(0.0, self.requested_kwh - self.planned_kwh - self.deferred_kwh)
 
     @property
     def current(self) -> SlotPlan | None:
+        """Return the plan for the current slot, if any."""
         return self.slots[0] if self.slots else None
 
     def next_charge(self) -> SlotPlan | None:
@@ -429,7 +440,7 @@ class ChargePlan:
         return next((s for s in self.slots if s.energy_kwh > ENERGY_EPS_KWH), None)
 
 
-def plan_energy(  # noqa: PLR0913
+def plan_energy(
     slots: list[PlanSlot],
     energy_kwh: float,
     min_kw: float,
@@ -439,7 +450,8 @@ def plan_energy(  # noqa: PLR0913
     next_kwh: float = 0.0,
     min_saving: float = 1.0,
 ) -> ChargePlan:
-    """Allocate *energy_kwh* across *slots* at minimum total cost.
+    """
+    Allocate *energy_kwh* across *slots* at minimum total cost.
 
     Args:
         slots: Slots of the current window, starting now.
@@ -451,6 +463,7 @@ def plan_energy(  # noqa: PLR0913
         next_kwh: The next window's own amount, reserved before deferring.
         min_saving: Fraction (0-1) the next window must be cheaper per kWh
             for energy to be deferred; 1 or more disables deferral.
+
     """
     if next_slots and min_saving < 1:
         return _plan_with_deferral(
@@ -487,7 +500,7 @@ def plan_energy(  # noqa: PLR0913
     return plan
 
 
-def _plan_with_deferral(  # noqa: PLR0913
+def _plan_with_deferral(
     slots: list[PlanSlot],
     energy_kwh: float,
     min_kw: float,
@@ -695,7 +708,8 @@ MAX_ESTIMATE_GAP = timedelta(minutes=15)
 
 @dataclass
 class DailyEnergyTracker:
-    """Track energy delivered to the EV within the current daily window.
+    """
+    Track energy delivered to the EV within the current daily window.
 
     Uses a charger energy meter when available (handles counter resets),
     otherwise integrates the commanded charging power over time.
@@ -714,6 +728,7 @@ class DailyEnergyTracker:
     def update(
         self, now: datetime, window_start: datetime, meter_kwh: float | None
     ) -> None:
+        """Advance the window and add energy delivered since the last update."""
         now_utc = to_utc(now)
         window_utc = to_utc(window_start)
         if self.window_start != window_utc:
@@ -736,6 +751,7 @@ class DailyEnergyTracker:
         self.last_update = now_utc
 
     def as_dict(self) -> dict[str, Any]:
+        """Serialize the tracker for storage."""
         return {
             "window_start": (
                 self.window_start.isoformat() if self.window_start else None
@@ -750,6 +766,7 @@ class DailyEnergyTracker:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> DailyEnergyTracker:
+        """Restore a tracker from stored data."""
         return cls(
             window_start=to_utc(data.get("window_start")),
             delivered_kwh=float(data.get("delivered_kwh") or 0.0),

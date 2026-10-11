@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-
 from ev_charger_manager_pure import charge_strategy as S
 from ev_charger_manager_pure import planner as P
 
@@ -114,7 +113,9 @@ def _hull_cost(slot, e):
         if duty > 1 + 1e-9:
             continue
         s = min(q, slot.surplus_kw)
-        best = min(best, duty * h * (s * slot.export_price + (q - s) * slot.import_price))
+        best = min(
+            best, duty * h * (s * slot.export_price + (q - s) * slot.import_price)
+        )
     return best
 
 
@@ -165,7 +166,9 @@ def simulate(spot_fn, solar_fn, kwh, forecast_scale=1.0):
     t = DAY
     while t < DAY + timedelta(days=1):
         slots = P.build_slots(t, DAY + timedelta(days=1), imp, exp, forecast, BASE_KW)
-        surplus = max(0.0, P.solar_kw_between(actual, slots[0].start, slots[0].end) - BASE_KW)
+        surplus = max(
+            0.0, P.solar_kw_between(actual, slots[0].start, slots[0].end) - BASE_KW
+        )
         slots[0] = replace(slots[0], surplus_kw=surplus)
         plan = P.plan_energy(slots, max(0.0, kwh - delivered), MIN_KW, MAX_KW)
         decision = S.strategy_fixed_daily_amount(plan, MIN_A, MAX_A, PH, V, TZ)
@@ -204,7 +207,10 @@ DST_AFTER = datetime(2026, 10, 27, tzinfo=TZ)
 
 def test_plain_price_lists_follow_dst_day_length():
     series = P.parse_price_series(
-        {"today": list(range(100)), "tomorrow": [1.0] * 96}, DST_DAY, DST_NEXT, DST_AFTER
+        {"today": list(range(100)), "tomorrow": [1.0] * 96},
+        DST_DAY,
+        DST_NEXT,
+        DST_AFTER,
     )
     assert len(series) == 196
     assert series[99].end == DST_NEXT.astimezone(UTC)
@@ -245,7 +251,12 @@ def test_missing_values_keep_alignment():
 def test_unpublished_slots_use_previous_day_prices():
     imp, exp, solar = make_day(cheap_night, sun)
     slots = P.build_slots(
-        DAY + timedelta(hours=20), DAY + timedelta(days=1, hours=7), imp, exp, solar, BASE_KW
+        DAY + timedelta(hours=20),
+        DAY + timedelta(days=1, hours=7),
+        imp,
+        exp,
+        solar,
+        BASE_KW,
     )
     estimated = [s for s in slots if s.estimated_price]
     assert len(estimated) == 28
@@ -303,8 +314,13 @@ TOMORROW_CHEAP_NIGHT = hourly(MIDNIGHT, [0.8] * 6 + [1.5] * 18)
 
 def test_defers_to_tomorrow_when_at_least_min_saving_cheaper():
     plan = P.plan_energy(
-        TODAY_EXPENSIVE, 5, MIN_KW, MAX_KW,
-        next_slots=TOMORROW_CHEAP_NIGHT, next_kwh=5, min_saving=0.5,
+        TODAY_EXPENSIVE,
+        5,
+        MIN_KW,
+        MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT,
+        next_kwh=5,
+        min_saving=0.5,
     )
     assert plan.deferred_kwh == pytest.approx(5)
     assert plan.planned_kwh == pytest.approx(0)
@@ -319,8 +335,13 @@ def test_defers_to_tomorrow_when_at_least_min_saving_cheaper():
 
 def test_keeps_today_when_saving_below_threshold():
     plan = P.plan_energy(
-        TODAY_EXPENSIVE, 5, MIN_KW, MAX_KW,
-        next_slots=TOMORROW_CHEAP_NIGHT, next_kwh=5, min_saving=0.7,
+        TODAY_EXPENSIVE,
+        5,
+        MIN_KW,
+        MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT,
+        next_kwh=5,
+        min_saving=0.7,
     )
     assert plan.deferred_kwh == 0
     assert plan.planned_kwh == pytest.approx(5)
@@ -328,8 +349,13 @@ def test_keeps_today_when_saving_below_threshold():
 
 def test_deferral_disabled_at_full_saving():
     plan = P.plan_energy(
-        TODAY_EXPENSIVE, 5, MIN_KW, MAX_KW,
-        next_slots=TOMORROW_CHEAP_NIGHT, next_kwh=5, min_saving=1.0,
+        TODAY_EXPENSIVE,
+        5,
+        MIN_KW,
+        MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT,
+        next_kwh=5,
+        min_saving=1.0,
     )
     assert plan.deferred_kwh == 0
 
@@ -337,8 +363,13 @@ def test_deferral_disabled_at_full_saving():
 def test_only_expensive_part_of_today_is_deferred():
     today = hourly(T14, [2.0] * 10, surplus=[MAX_KW] + [0.0] * 9)  # 1 h of solar
     plan = P.plan_energy(
-        today, 5, MIN_KW, MAX_KW,
-        next_slots=TOMORROW_CHEAP_NIGHT, next_kwh=5, min_saving=0.5,
+        today,
+        5,
+        MIN_KW,
+        MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT,
+        next_kwh=5,
+        min_saving=0.5,
     )
     assert plan.planned_kwh == pytest.approx(MAX_KW)
     assert plan.solar_kwh == pytest.approx(MAX_KW)
@@ -348,8 +379,13 @@ def test_only_expensive_part_of_today_is_deferred():
 def test_tomorrows_own_amount_is_reserved_first():
     tomorrow = hourly(MIDNIGHT, [0.8] * 2 + [1.5] * 22)  # cheap hours fit only 4.6 kWh
     plan = P.plan_energy(
-        TODAY_EXPENSIVE, 5, MIN_KW, MAX_KW,
-        next_slots=tomorrow, next_kwh=2 * MAX_KW, min_saving=0.5,
+        TODAY_EXPENSIVE,
+        5,
+        MIN_KW,
+        MAX_KW,
+        next_slots=tomorrow,
+        next_kwh=2 * MAX_KW,
+        min_saving=0.5,
     )
     assert plan.deferred_kwh == 0
 
@@ -357,8 +393,13 @@ def test_tomorrows_own_amount_is_reserved_first():
 def test_shortfall_is_not_deferred():
     today = hourly(T14, [2.0])  # only 2.3 kWh fits today
     plan = P.plan_energy(
-        today, 5, MIN_KW, MAX_KW,
-        next_slots=TOMORROW_CHEAP_NIGHT, next_kwh=5, min_saving=0.5,
+        today,
+        5,
+        MIN_KW,
+        MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT,
+        next_kwh=5,
+        min_saving=0.5,
     )
     assert plan.deferred_kwh == pytest.approx(MAX_KW)
     assert plan.shortfall_kwh == pytest.approx(5 - MAX_KW)

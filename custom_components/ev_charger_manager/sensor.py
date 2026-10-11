@@ -227,6 +227,7 @@ class EVChargerManagerSensor(EVChargerManagerEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return extra attributes from coordinator data."""
         if self.coordinator.data is None or self.entity_description.attrs_fn is None:
             return None
         return self.entity_description.attrs_fn(self.coordinator.data) or None  # type: ignore[operator]

@@ -247,10 +247,12 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     @property
     def charger_energy_entity(self) -> str | None:
+        """Return the charger energy meter entity ID."""
         return self.config_entry.data.get(CONF_CHARGER_ENERGY_ENTITY)
 
     @property
     def daily_kwh(self) -> float:
+        """Return the energy to deliver per daily window (kWh)."""
         return float(self.config_entry.options.get(CONF_DAILY_KWH, DEFAULT_DAILY_KWH))
 
     @daily_kwh.setter
@@ -262,7 +264,12 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     @property
     def daily_reset_hour(self) -> int:
-        return int(self.config_entry.options.get(CONF_DAILY_RESET_HOUR, DEFAULT_DAILY_RESET_HOUR))
+        """Return the local hour the daily window starts."""
+        return int(
+            self.config_entry.options.get(
+                CONF_DAILY_RESET_HOUR, DEFAULT_DAILY_RESET_HOUR
+            )
+        )
 
     @daily_reset_hour.setter
     def daily_reset_hour(self, value: int) -> None:
@@ -273,7 +280,12 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     @property
     def defer_min_saving(self) -> float:
-        return float(self.config_entry.options.get(CONF_DEFER_MIN_SAVING, DEFAULT_DEFER_MIN_SAVING))
+        """Return the saving (%) required to defer to tomorrow."""
+        return float(
+            self.config_entry.options.get(
+                CONF_DEFER_MIN_SAVING, DEFAULT_DEFER_MIN_SAVING
+            )
+        )
 
     @defer_min_saving.setter
     def defer_min_saving(self, value: float) -> None:
@@ -422,7 +434,9 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                         self.nordpool_export_entity,
                         np_state.state,
                     )
-                export_series = parse_price_series(dict(np_state.attributes), *day_starts)
+                export_series = parse_price_series(
+                    dict(np_state.attributes), *day_starts
+                )
 
         # --- EV state of charge / kWh needed ---
         result.ev_kwh_needed = self._compute_ev_kwh_needed()
@@ -490,7 +504,9 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         elif mode == ChargeMode.FIXED_DAILY_AMOUNT:
             remaining_kwh = max(
                 0.0,
-                self.daily_kwh + self._tracker.carry_over_kwh - self._tracker.delivered_kwh,
+                self.daily_kwh
+                + self._tracker.carry_over_kwh
+                - self._tracker.delivered_kwh,
             )
             if result.ev_kwh_needed is not None:
                 remaining_kwh = min(remaining_kwh, result.ev_kwh_needed)
@@ -651,7 +667,9 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             value = float(state.state)
         except ValueError:
             LOGGER.warning(
-                "Could not parse energy from %s: %s", self.charger_energy_entity, state.state
+                "Could not parse energy from %s: %s",
+                self.charger_energy_entity,
+                state.state,
             )
             return None
         unit = state.attributes.get("unit_of_measurement", "")

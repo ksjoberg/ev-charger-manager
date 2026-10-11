@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from typing import TYPE_CHECKING
 
-from .planner import ENERGY_EPS_KWH, ChargePlan
+from .planner import ENERGY_EPS_KWH
+
+if TYPE_CHECKING:
+    from datetime import datetime, tzinfo
+
+    from .planner import ChargePlan
 
 
 @dataclass
@@ -347,7 +352,8 @@ def strategy_fixed_daily_amount(
     voltage: float,
     tz: tzinfo,
 ) -> ChargeDecision:
-    """Execute the current slot of a fixed-amount charge plan.
+    """
+    Execute the current slot of a fixed-amount charge plan.
 
     The plan is rebuilt on every update for the energy still missing, so this
     only has to translate the current slot's planned energy into a current.
@@ -359,6 +365,7 @@ def strategy_fixed_daily_amount(
         phases: Number of AC phases.
         voltage: Phase voltage in V.
         tz: Time zone used for times in the reason string.
+
     """
     if plan.requested_kwh <= ENERGY_EPS_KWH:
         return ChargeDecision(
