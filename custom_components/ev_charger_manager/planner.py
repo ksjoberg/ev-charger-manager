@@ -31,6 +31,7 @@ the next window can supply them at least ``min_saving`` cheaper.
 from __future__ import annotations
 
 import bisect
+import itertools
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
@@ -76,15 +77,47 @@ class PriceInterval:
     value: float
 
 
+def _parse_price_mapping(raw: dict[Any, Any]) -> list[PriceInterval]:
+    """
+    Parse a ``{start: price}`` mapping, which may span several days.
+
+    Each price lasts until the next start, capped at the shortest spacing
+    between starts so gaps in the data stay uncovered.
+    """
+    parsed: list[tuple[datetime, float]] = []
+    for key, value in raw.items():
+        start = to_utc(key)
+        if start is None or value is None:
+            continue
+        try:
+            parsed.append((start, float(value)))
+        except TypeError, ValueError:
+            continue
+    parsed.sort(key=lambda p: p[0])
+    gaps = [b[0] - a[0] for a, b in itertools.pairwise(parsed)]
+    slot_len = min((g for g in gaps if g > timedelta(0)), default=DEFAULT_SLOT)
+    intervals = []
+    for i, (start, value) in enumerate(parsed):
+        end = start + slot_len
+        if i + 1 < len(parsed):
+            end = min(end, parsed[i + 1][0])
+        if end > start:
+            intervals.append(PriceInterval(start, end, value))
+    return intervals
+
+
 def _parse_price_list(
     raw: Any, day_start: datetime, day_end: datetime
 ) -> list[PriceInterval]:
     """
     Parse one day's price list.
 
-    Accepts either Nordpool ``raw_*`` style dicts (``start``/``end``/``value``)
-    or plain lists of numbers spread evenly over the day.
+    Accepts Nordpool ``raw_*`` style dicts (``start``/``end``/``value``), plain
+    lists of numbers spread evenly over the day, or a ``{start: price}``
+    mapping (which may also cover the following day).
     """
+    if isinstance(raw, dict):
+        return _parse_price_mapping(raw)
     if not isinstance(raw, list) or not raw:
         return []
 
