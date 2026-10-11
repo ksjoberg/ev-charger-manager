@@ -11,6 +11,7 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_CHARGE_MODE,
     CONF_CHARGER_CURRENT_ENTITY,
+    CONF_CHARGER_ENERGY_ENTITY,
     CONF_EV_BATTERY_CAPACITY_ENTITY,
     CONF_EV_SOC_ENTITY,
     CONF_EV_TARGET_SOC_ENTITY,
@@ -68,7 +69,10 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 errors[CONF_CHARGER_CURRENT_ENTITY] = "entity_not_found"
             elif state.domain != "number":
                 errors[CONF_CHARGER_CURRENT_ENTITY] = "not_a_number_entity"
-            else:
+            energy_entity = user_input.get(CONF_CHARGER_ENERGY_ENTITY)
+            if energy_entity and self.hass.states.get(energy_entity) is None:
+                errors[CONF_CHARGER_ENERGY_ENTITY] = "entity_not_found"
+            if not errors:
                 self._data.update(user_input)
                 return await self.async_step_solar()
 
@@ -78,6 +82,11 @@ class EVChargerManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_CHARGER_CURRENT_ENTITY): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="number")
+                    ),
+                    vol.Optional(CONF_CHARGER_ENERGY_ENTITY): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor", device_class="energy"
+                        )
                     ),
                     vol.Optional(
                         CONF_MIN_CURRENT,
@@ -319,6 +328,7 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
             # Validate entities that were provided
             for key in (
                 CONF_CHARGER_CURRENT_ENTITY,
+                CONF_CHARGER_ENERGY_ENTITY,
                 CONF_PV_POWER_ENTITY,
                 CONF_GRID_POWER_ENTITY,
                 CONF_NORDPOOL_IMPORT_ENTITY,
@@ -342,6 +352,7 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
 
                 for key in (
                     CONF_CHARGER_CURRENT_ENTITY,
+                    CONF_CHARGER_ENERGY_ENTITY,
                     CONF_PHASES,
                     CONF_VOLTAGE,
                     CONF_PV_POWER_ENTITY,
@@ -384,6 +395,14 @@ class EVChargerManagerOptionsFlowHandler(config_entries.OptionsFlow):
                         default=data.get(CONF_CHARGER_CURRENT_ENTITY, ""),
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="number")
+                    ),
+                    vol.Optional(
+                        CONF_CHARGER_ENERGY_ENTITY,
+                        default=data.get(CONF_CHARGER_ENERGY_ENTITY, ""),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor", device_class="energy"
+                        )
                     ),
                     vol.Optional(
                         CONF_MIN_CURRENT,

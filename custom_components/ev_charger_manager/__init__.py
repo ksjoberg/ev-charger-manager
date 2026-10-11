@@ -5,9 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from homeassistant.const import Platform
+from homeassistant.helpers.storage import Store
 from homeassistant.loader import async_get_loaded_integration
 
-from .coordinator import EVChargerManagerCoordinator
+from .const import DOMAIN
+from .coordinator import STORAGE_VERSION, EVChargerManagerCoordinator
 from .data import EVChargerManagerRuntimeData
 
 if TYPE_CHECKING:
@@ -56,3 +58,11 @@ async def async_reload_entry(
 ) -> None:
     """Reload config entry when options change."""
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_entry(
+    hass: HomeAssistant,
+    entry: EVChargerManagerConfigEntry,
+) -> None:
+    """Remove persisted daily-energy tracking when the entry is deleted."""
+    await Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}").async_remove()

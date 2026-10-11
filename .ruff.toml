@@ -34,3 +34,13 @@ keep-runtime-typing = true
 
 [lint.mccabe]
 max-complexity = 25
+
+[lint.per-file-ignores]
+"tests/**" = [
+    "ANN", # type annotations on test functions and helpers
+    "D", # docstrings on test functions
+    "INP001", # tests/ is not a package
+    "N812", # short module aliases (S, P)
+    "S101", # pytest uses assert
+    "S311", # non-cryptographic random in property tests
+]

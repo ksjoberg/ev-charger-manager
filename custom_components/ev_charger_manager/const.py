@@ -23,12 +23,16 @@ CONF_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
 CONF_EV_SOC_ENTITY = "ev_soc_entity"
 CONF_FORECAST_SOLAR_ENTITIES = "forecast_solar_entities"
 CONF_BASE_LOAD_W = "base_load_w"
+CONF_CHARGER_ENERGY_ENTITY = "charger_energy_entity"
 
 # Options keys (stored in entry.options, changeable at runtime)
 CONF_CHARGE_MODE = "charge_mode"
 CONF_CHARGE_HOURS = "charge_hours_needed"
 CONF_PRICE_AWARENESS = "price_awareness"
 CONF_CHARGE_DEADBAND = "charge_deadband"
+CONF_DAILY_KWH = "daily_kwh"
+CONF_DAILY_RESET_HOUR = "daily_reset_hour"
+CONF_DEFER_MIN_SAVING = "defer_min_saving"
 
 # Defaults
 DEFAULT_MIN_CURRENT = 6
@@ -39,6 +43,9 @@ DEFAULT_CHARGE_HOURS = 4
 DEFAULT_PRICE_AWARENESS = 0.5
 DEFAULT_CHARGE_DEADBAND = 1.0
 DEFAULT_BASE_LOAD_W = 500
+DEFAULT_DAILY_KWH = 10.0
+DEFAULT_DAILY_RESET_HOUR = 0
+DEFAULT_DEFER_MIN_SAVING = 50  # percent; 100 disables deferral
 
 # Update interval in minutes
 UPDATE_INTERVAL_MINUTES = 5
@@ -51,6 +58,7 @@ class ChargeMode(StrEnum):
     SOLAR_EXCESS = "solar_excess"
     MINIMIZE_COST = "minimize_cost"
     SOLAR_PRICE_BLEND = "solar_price_blend"
+    FIXED_DAILY_AMOUNT = "fixed_daily_amount"
 
 
 CHARGE_MODES = [
@@ -58,6 +66,7 @@ CHARGE_MODES = [
     ChargeMode.SOLAR_EXCESS,
     ChargeMode.MINIMIZE_COST,
     ChargeMode.SOLAR_PRICE_BLEND,
+    ChargeMode.FIXED_DAILY_AMOUNT,
 ]
 DEFAULT_CHARGE_MODE = ChargeMode.ASAP
 

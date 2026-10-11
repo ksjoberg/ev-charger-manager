@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.const import UnitOfElectricCurrent, UnitOfPower
+from homeassistant.const import (
+    PERCENTAGE,
+    UnitOfElectricCurrent,
+    UnitOfEnergy,
+    UnitOfPower,
+)
 
 from .entity import EVChargerManagerEntity
 
@@ -29,6 +34,9 @@ async def async_setup_entry(
         EVChargerMaxCurrentNumber(coordinator),
         EVChargerPriceAwarenessNumber(coordinator),
         EVChargerDeadbandNumber(coordinator),
+        EVChargerDailyKwhNumber(coordinator),
+        EVChargerDailyResetHourNumber(coordinator),
+        EVChargerDeferMinSavingNumber(coordinator),
     ]
     if coordinator.forecast_solar_entities:
         entities.append(EVChargerBaseLoadNumber(coordinator))
@@ -163,4 +171,81 @@ class EVChargerBaseLoadNumber(EVChargerManagerEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Store the new value and refresh the coordinator."""
         self.coordinator.base_load_w = round(float(value) / 50) * 50
+        await self.coordinator.async_request_refresh()
+
+
+class EVChargerDailyKwhNumber(EVChargerManagerEntity, NumberEntity):
+    """Energy to deliver per daily window in Fixed Daily Amount mode."""
+
+    _attr_icon = "mdi:battery-plus-variant"
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 100.0
+    _attr_native_step = 0.1
+    _attr_mode = NumberMode.BOX
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_translation_key = "daily_kwh"
+
+    def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        """Initialize the number entity."""
+        super().__init__(coordinator, unique_id_suffix="daily_kwh")
+
+    @property
+    def native_value(self) -> float:
+        """Return the current value."""
+        return float(self.coordinator.daily_kwh)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Store the new value and refresh the coordinator."""
+        self.coordinator.daily_kwh = round(float(value), 1)
+        await self.coordinator.async_request_refresh()
+
+
+class EVChargerDailyResetHourNumber(EVChargerManagerEntity, NumberEntity):
+    """Local hour at which the daily window starts (and the previous one is due)."""
+
+    _attr_icon = "mdi:clock-start"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 23
+    _attr_native_step = 1
+    _attr_mode = NumberMode.BOX
+    _attr_translation_key = "daily_reset_hour"
+
+    def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        """Initialize the number entity."""
+        super().__init__(coordinator, unique_id_suffix="daily_reset_hour")
+
+    @property
+    def native_value(self) -> float:
+        """Return the current value."""
+        return float(self.coordinator.daily_reset_hour)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Store the new value and refresh the coordinator."""
+        self.coordinator.daily_reset_hour = round(value)
+        await self.coordinator.async_request_refresh()
+
+
+class EVChargerDeferMinSavingNumber(EVChargerManagerEntity, NumberEntity):
+    """How much cheaper tomorrow must be before today's charging is deferred."""
+
+    _attr_icon = "mdi:calendar-arrow-right"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 5
+    _attr_mode = NumberMode.BOX
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_translation_key = "defer_min_saving"
+
+    def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        """Initialize the number entity."""
+        super().__init__(coordinator, unique_id_suffix="defer_min_saving")
+
+    @property
+    def native_value(self) -> float:
+        """Return the current value."""
+        return float(self.coordinator.defer_min_saving)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Store the new value and refresh the coordinator."""
+        self.coordinator.defer_min_saving = float(round(value))
         await self.coordinator.async_request_refresh()

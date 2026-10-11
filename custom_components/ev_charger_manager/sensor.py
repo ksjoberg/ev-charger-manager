@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -28,6 +28,7 @@ class EVChargerSensorDescription(SensorEntityDescription):
     """Extended description that includes a value extractor."""
 
     value_fn: object = None  # Callable[[EVChargerData], StateType]
+    attrs_fn: object = None  # Callable[[EVChargerData], dict[str, Any]] | None
 
 
 # Always-on sensors
@@ -73,6 +74,31 @@ SENSOR_DESCRIPTIONS: tuple[EVChargerSensorDescription, ...] = (
         translation_key="charge_plan",
         icon="mdi:calendar-clock",
         value_fn=lambda d: d.charge_plan or None,
+        attrs_fn=lambda d: d.charge_plan_attributes,
+    ),
+    EVChargerSensorDescription(
+        key="daily_delivered",
+        translation_key="daily_delivered",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:battery-charging-high",
+        value_fn=lambda d: d.daily_delivered_kwh,
+    ),
+    EVChargerSensorDescription(
+        key="daily_remaining",
+        translation_key="daily_remaining",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        icon="mdi:battery-arrow-up-outline",
+        value_fn=lambda d: d.daily_remaining_kwh,
+    ),
+    EVChargerSensorDescription(
+        key="planned_cost",
+        translation_key="planned_cost",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:cash-clock",
+        value_fn=lambda d: d.planned_cost,
     ),
 )
 
@@ -180,6 +206,8 @@ class EVChargerManagerSensor(EVChargerManagerEntity, SensorEntity):
     """A sensor that reads a computed value from the coordinator data."""
 
     entity_description: EVChargerSensorDescription
+    # Detailed plan attributes are large and change every update
+    _unrecorded_attributes = frozenset({"blocks", "schedule"})
 
     def __init__(
         self,
@@ -196,3 +224,10 @@ class EVChargerManagerSensor(EVChargerManagerEntity, SensorEntity):
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data)  # type: ignore[call-arg]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return extra attributes from coordinator data."""
+        if self.coordinator.data is None or self.entity_description.attrs_fn is None:
+            return None
+        return self.entity_description.attrs_fn(self.coordinator.data) or None  # type: ignore[operator]
