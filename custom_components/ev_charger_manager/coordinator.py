@@ -28,6 +28,7 @@ from .const import (
     CONF_CHARGER_ENERGY_ENTITY,
     CONF_DAILY_KWH,
     CONF_DAILY_RESET_HOUR,
+    CONF_DEFER_MIN_SAVING,
     CONF_EV_BATTERY_CAPACITY_ENTITY,
     CONF_EV_SOC_ENTITY,
     CONF_EV_TARGET_SOC_ENTITY,
@@ -47,6 +48,7 @@ from .const import (
     DEFAULT_CHARGE_MODE,
     DEFAULT_DAILY_KWH,
     DEFAULT_DAILY_RESET_HOUR,
+    DEFAULT_DEFER_MIN_SAVING,
     DEFAULT_MAX_CURRENT,
     DEFAULT_MIN_CURRENT,
     DEFAULT_PHASES,
@@ -269,6 +271,17 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             options={**self.config_entry.options, CONF_DAILY_RESET_HOUR: value},
         )
 
+    @property
+    def defer_min_saving(self) -> float:
+        return float(self.config_entry.options.get(CONF_DEFER_MIN_SAVING, DEFAULT_DEFER_MIN_SAVING))
+
+    @defer_min_saving.setter
+    def defer_min_saving(self, value: float) -> None:
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={**self.config_entry.options, CONF_DEFER_MIN_SAVING: value},
+        )
+
     # ------------------------------------------------------------------
     # Options (changeable at runtime via select/number entities)
     # ------------------------------------------------------------------
@@ -417,6 +430,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         # --- Energy delivered within the current daily window ---
         window_start = _daily_window_start(now, self.daily_reset_hour)
         self._tracker.update(now, window_start, self._read_charger_energy_kwh())
+        self._tracker.deferred_kwh = 0.0  # set again below if the plan defers
         result.daily_delivered_kwh = round(self._tracker.delivered_kwh, 2)
 
         # --- Hours needed at max current ---
@@ -474,14 +488,18 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             )
 
         elif mode == ChargeMode.FIXED_DAILY_AMOUNT:
-            remaining_kwh = max(0.0, self.daily_kwh - self._tracker.delivered_kwh)
+            remaining_kwh = max(
+                0.0,
+                self.daily_kwh + self._tracker.carry_over_kwh - self._tracker.delivered_kwh,
+            )
             if result.ev_kwh_needed is not None:
                 remaining_kwh = min(remaining_kwh, result.ev_kwh_needed)
             result.daily_remaining_kwh = round(remaining_kwh, 2)
 
+            deadline = window_start + timedelta(days=1)
             slots = build_slots(
                 now=now,
-                deadline=window_start + timedelta(days=1),
+                deadline=deadline,
                 import_series=import_series,
                 export_series=export_series,
                 solar_forecast=combined_forecast,
@@ -494,13 +512,34 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             if slots and measured_surplus_kw is not None:
                 slots[0] = replace(slots[0], surplus_kw=measured_surplus_kw)
 
+            # Next window, only where prices are published (tomorrow's arrive
+            # early afternoon); used to defer energy that is much cheaper then.
+            next_slots = []
+            if import_series:
+                next_slots = [
+                    s
+                    for s in build_slots(
+                        now=deadline,
+                        deadline=window_start + timedelta(days=2),
+                        import_series=import_series,
+                        export_series=export_series,
+                        solar_forecast=combined_forecast,
+                        base_load_kw=self.base_load_w / 1000.0,
+                    )
+                    if not s.estimated_price
+                ]
+
             watts_per_amp = self.phases * self.voltage
             plan = plan_energy(
                 slots,
                 remaining_kwh,
                 min_kw=self.min_current * watts_per_amp / 1000.0,
                 max_kw=self.max_current * watts_per_amp / 1000.0,
+                next_slots=next_slots,
+                next_kwh=self.daily_kwh,
+                min_saving=self.defer_min_saving / 100.0,
             )
+            self._tracker.deferred_kwh = plan.deferred_kwh
             tz = dt_util.get_default_time_zone()
             decision = strategy_fixed_daily_amount(
                 plan,
@@ -511,7 +550,10 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 tz=tz,
             )
             result.charge_plan = plan_summary(plan, tz)
-            result.charge_plan_attributes = plan_attributes(plan, tz)
+            result.charge_plan_attributes = {
+                **plan_attributes(plan, tz),
+                "carried_over_kwh": round(self._tracker.carry_over_kwh, 2),
+            }
             result.planned_cost = round(plan.cost, 2)
 
         else:  # MINIMIZE_COST

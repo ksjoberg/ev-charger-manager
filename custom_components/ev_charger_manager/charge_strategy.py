@@ -372,9 +372,15 @@ def strategy_fixed_daily_amount(
         if plan.shortfall_kwh > ENERGY_EPS_KWH
         else ""
     )
+    deferred = (
+        f"; {plan.deferred_kwh:.1f} kWh deferred to tomorrow "
+        f"(est. {plan.deferred_cost:.2f} instead of {plan.avoided_cost:.2f})"
+        if plan.deferred_kwh > ENERGY_EPS_KWH
+        else ""
+    )
     summary = (
         f"{plan.requested_kwh:.1f} kWh left by {deadline}, "
-        f"est. cost {plan.cost:.2f}{shortfall}"
+        f"est. cost {plan.cost:.2f}{shortfall}{deferred}"
     )
 
     watts_per_amp = phases * voltage

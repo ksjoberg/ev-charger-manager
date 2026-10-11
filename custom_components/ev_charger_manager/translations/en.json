@@ -171,6 +171,9 @@
       },
       "daily_reset_hour": {
         "name": "Daily window start hour"
+      },
+      "defer_min_saving": {
+        "name": "Defer to tomorrow: minimum saving"
       }
     }
   },

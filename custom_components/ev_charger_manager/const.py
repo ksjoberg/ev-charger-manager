@@ -32,6 +32,7 @@ CONF_PRICE_AWARENESS = "price_awareness"
 CONF_CHARGE_DEADBAND = "charge_deadband"
 CONF_DAILY_KWH = "daily_kwh"
 CONF_DAILY_RESET_HOUR = "daily_reset_hour"
+CONF_DEFER_MIN_SAVING = "defer_min_saving"
 
 # Defaults
 DEFAULT_MIN_CURRENT = 6
@@ -44,6 +45,7 @@ DEFAULT_CHARGE_DEADBAND = 1.0
 DEFAULT_BASE_LOAD_W = 500
 DEFAULT_DAILY_KWH = 10.0
 DEFAULT_DAILY_RESET_HOUR = 0
+DEFAULT_DEFER_MIN_SAVING = 50  # percent; 100 disables deferral
 
 # Update interval in minutes
 UPDATE_INTERVAL_MINUTES = 5

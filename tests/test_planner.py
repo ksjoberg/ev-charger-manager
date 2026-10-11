@@ -277,3 +277,111 @@ def test_tracker_integrates_power_without_meter():
     assert tr.delivered_kwh == pytest.approx(2.3 * 5 / 60)
     tr.update(DAY + timedelta(hours=2), DAY, None)  # gap too long, ignored
     assert tr.delivered_kwh == pytest.approx(2.3 * 5 / 60)
+
+
+# ----------------------------------------------------------------------
+# Deferring to the next window once its prices are published
+# ----------------------------------------------------------------------
+
+T14 = datetime(2026, 10, 12, 14, tzinfo=TZ).astimezone(UTC)
+MIDNIGHT = datetime(2026, 10, 13, tzinfo=TZ).astimezone(UTC)
+
+
+def hourly(start, prices, surplus=None):
+    surplus = surplus or [0.0] * len(prices)
+    return [
+        P.PlanSlot(
+            start + timedelta(hours=i), start + timedelta(hours=i + 1), p, 0.3, s
+        )
+        for i, (p, s) in enumerate(zip(prices, surplus, strict=True))
+    ]
+
+
+TODAY_EXPENSIVE = hourly(T14, [2.0] * 10)
+TOMORROW_CHEAP_NIGHT = hourly(MIDNIGHT, [0.8] * 6 + [1.5] * 18)
+
+
+def test_defers_to_tomorrow_when_at_least_min_saving_cheaper():
+    plan = P.plan_energy(
+        TODAY_EXPENSIVE, 5, MIN_KW, MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT, next_kwh=5, min_saving=0.5,
+    )
+    assert plan.deferred_kwh == pytest.approx(5)
+    assert plan.planned_kwh == pytest.approx(0)
+    assert plan.shortfall_kwh == pytest.approx(0)
+    assert plan.deferred_cost == pytest.approx(5 * 0.8)
+    assert plan.avoided_cost == pytest.approx(5 * 2.0)
+    decision = S.strategy_fixed_daily_amount(plan, MIN_A, MAX_A, PH, V, TZ)
+    assert decision.target_current == 0
+    assert "5.0 kWh deferred to tomorrow" in decision.reason
+    assert P.plan_summary(plan, TZ).startswith("5.0 kWh deferred to tomorrow")
+
+
+def test_keeps_today_when_saving_below_threshold():
+    plan = P.plan_energy(
+        TODAY_EXPENSIVE, 5, MIN_KW, MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT, next_kwh=5, min_saving=0.7,
+    )
+    assert plan.deferred_kwh == 0
+    assert plan.planned_kwh == pytest.approx(5)
+
+
+def test_deferral_disabled_at_full_saving():
+    plan = P.plan_energy(
+        TODAY_EXPENSIVE, 5, MIN_KW, MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT, next_kwh=5, min_saving=1.0,
+    )
+    assert plan.deferred_kwh == 0
+
+
+def test_only_expensive_part_of_today_is_deferred():
+    today = hourly(T14, [2.0] * 10, surplus=[MAX_KW] + [0.0] * 9)  # 1 h of solar
+    plan = P.plan_energy(
+        today, 5, MIN_KW, MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT, next_kwh=5, min_saving=0.5,
+    )
+    assert plan.planned_kwh == pytest.approx(MAX_KW)
+    assert plan.solar_kwh == pytest.approx(MAX_KW)
+    assert plan.deferred_kwh == pytest.approx(5 - MAX_KW)
+
+
+def test_tomorrows_own_amount_is_reserved_first():
+    tomorrow = hourly(MIDNIGHT, [0.8] * 2 + [1.5] * 22)  # cheap hours fit only 4.6 kWh
+    plan = P.plan_energy(
+        TODAY_EXPENSIVE, 5, MIN_KW, MAX_KW,
+        next_slots=tomorrow, next_kwh=2 * MAX_KW, min_saving=0.5,
+    )
+    assert plan.deferred_kwh == 0
+
+
+def test_shortfall_is_not_deferred():
+    today = hourly(T14, [2.0])  # only 2.3 kWh fits today
+    plan = P.plan_energy(
+        today, 5, MIN_KW, MAX_KW,
+        next_slots=TOMORROW_CHEAP_NIGHT, next_kwh=5, min_saving=0.5,
+    )
+    assert plan.deferred_kwh == pytest.approx(MAX_KW)
+    assert plan.shortfall_kwh == pytest.approx(5 - MAX_KW)
+
+
+def test_no_next_window_slots_before_prices_are_published():
+    imp, exp, solar = make_day(cheap_night, sun)  # only today's prices known
+    next_window = P.build_slots(
+        DAY + timedelta(days=1), DAY + timedelta(days=2), imp, exp, solar, BASE_KW
+    )
+    assert next_window
+    assert all(s.estimated_price for s in next_window)
+
+
+def test_tracker_carries_deferred_energy_into_next_window():
+    tr = P.DailyEnergyTracker()
+    tr.update(DAY + timedelta(hours=14), DAY, 10.0)
+    tr.deferred_kwh = 4.0
+    assert P.DailyEnergyTracker.from_dict(tr.as_dict()) == tr
+    tomorrow = DAY + timedelta(days=1)
+    tr.update(tomorrow, tomorrow, 10.0)
+    assert tr.carry_over_kwh == pytest.approx(4.0)
+    assert tr.deferred_kwh == 0
+    day_after = tomorrow + timedelta(days=1)
+    tr.update(day_after, day_after, 10.0)
+    assert tr.carry_over_kwh == 0

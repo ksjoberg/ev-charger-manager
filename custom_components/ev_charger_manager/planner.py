@@ -19,6 +19,12 @@ greedy fill of the cheapest marginal kWh across all slots is optimal.  This
 naturally handles cases where exporting solar now and importing later is
 cheaper, because the comparison is always export price now vs import price
 later.
+
+Once the next window's prices are published, energy can be deferred to it:
+the next window first reserves its own daily amount, and each remaining kWh
+it could still take competes with today's kWh at its price divided by
+``1 - min_saving``.  Today's most expensive kWh are thus given up whenever
+the next window can supply them at least ``min_saving`` cheaper.
 """
 
 from __future__ import annotations
@@ -405,10 +411,14 @@ class ChargePlan:
     grid_kwh: float = 0.0
     deadline: datetime | None = None
     blocks: list[dict[str, Any]] = field(default_factory=list)
+    # Energy given up in this window because the next window is much cheaper
+    deferred_kwh: float = 0.0
+    deferred_cost: float = 0.0  # what the deferred energy costs in the next window
+    avoided_cost: float = 0.0  # what it would have cost in this window
 
     @property
     def shortfall_kwh(self) -> float:
-        return max(0.0, self.requested_kwh - self.planned_kwh)
+        return max(0.0, self.requested_kwh - self.planned_kwh - self.deferred_kwh)
 
     @property
     def current(self) -> SlotPlan | None:
@@ -419,13 +429,34 @@ class ChargePlan:
         return next((s for s in self.slots if s.energy_kwh > ENERGY_EPS_KWH), None)
 
 
-def plan_energy(
+def plan_energy(  # noqa: PLR0913
     slots: list[PlanSlot],
     energy_kwh: float,
     min_kw: float,
     max_kw: float,
+    *,
+    next_slots: list[PlanSlot] | None = None,
+    next_kwh: float = 0.0,
+    min_saving: float = 1.0,
 ) -> ChargePlan:
-    """Allocate *energy_kwh* across *slots* at minimum total cost."""
+    """Allocate *energy_kwh* across *slots* at minimum total cost.
+
+    Args:
+        slots: Slots of the current window, starting now.
+        energy_kwh: Energy still to deliver in the current window.
+        min_kw: Minimum charging power.
+        max_kw: Maximum charging power.
+        next_slots: Slots of the next window with published prices.  When
+            given, energy may be deferred to them.
+        next_kwh: The next window's own amount, reserved before deferring.
+        min_saving: Fraction (0-1) the next window must be cheaper per kWh
+            for energy to be deferred; 1 or more disables deferral.
+    """
+    if next_slots and min_saving < 1:
+        return _plan_with_deferral(
+            slots, energy_kwh, min_kw, max_kw, next_slots, next_kwh, min_saving
+        )
+
     plan = ChargePlan(
         slots=[SlotPlan(slot=s) for s in slots],
         requested_kwh=max(0.0, energy_kwh),
@@ -452,6 +483,80 @@ def plan_energy(
         plan.slots[i].energy_kwh += take
         remaining -= take
 
+    _finalize(plan)
+    return plan
+
+
+def _plan_with_deferral(  # noqa: PLR0913
+    slots: list[PlanSlot],
+    energy_kwh: float,
+    min_kw: float,
+    max_kw: float,
+    next_slots: list[PlanSlot],
+    next_kwh: float,
+    min_saving: float,
+) -> ChargePlan:
+    """Plan the current window, deferring kWh the next window does much cheaper."""
+    plan = plan_energy(slots, energy_kwh, min_kw, max_kw)
+    if plan.planned_kwh <= ENERGY_EPS_KWH:
+        return plan
+
+    # Capacity left in the next window after reserving its own amount.  Each
+    # slot consumes its segments in order, so the residual is the tail.
+    reserved = plan_energy(next_slots, next_kwh, min_kw, max_kw)
+    spare: list[tuple[float, float]] = []  # (price, kwh)
+    for sp in reserved.slots:
+        used = sp.energy_kwh
+        for price, kwh in _slot_segments(sp.slot, min_kw, max_kw):
+            skip = min(used, kwh)
+            used -= skip
+            if kwh - skip > 0:
+                spare.append((price, kwh - skip))
+    if not spare:
+        return plan
+
+    # (key, prefer-today, start, segment, slot index or -1, kwh, real price)
+    items = [
+        (price, 0, slot.start, k, i, kwh, price)
+        for i, slot in enumerate(slots)
+        for k, (price, kwh) in enumerate(_slot_segments(slot, min_kw, max_kw))
+    ]
+    hurdle = 1.0 - min_saving
+    items += [
+        (price / hurdle, 1, plan.deadline, 0, -1, kwh, price) for price, kwh in spare
+    ]
+    items.sort(key=lambda it: it[:4])
+
+    deferred = ChargePlan(
+        slots=[SlotPlan(slot=s) for s in slots],
+        requested_kwh=plan.requested_kwh,
+        min_kw=min_kw,
+        max_kw=max_kw,
+        deadline=plan.deadline,
+    )
+    # Only what fits in this window competes; a shortfall is never deferred.
+    remaining = plan.planned_kwh
+    for _, _, _, _, i, kwh, price in items:
+        if remaining <= 0:
+            break
+        take = min(kwh, remaining)
+        remaining -= take
+        if i >= 0:
+            deferred.slots[i].energy_kwh += take
+        else:
+            deferred.deferred_kwh += take
+            deferred.deferred_cost += take * price
+
+    if deferred.deferred_kwh <= ENERGY_EPS_KWH:
+        return plan
+    _finalize(deferred)
+    deferred.avoided_cost = plan.cost - deferred.cost
+    return deferred
+
+
+def _finalize(plan: ChargePlan) -> None:
+    """Fill in per-slot solar/grid split, costs, totals and display blocks."""
+    min_kw, max_kw = plan.min_kw, plan.max_kw
     for sp in plan.slots:
         if sp.energy_kwh <= 0:
             continue
@@ -470,7 +575,6 @@ def plan_energy(
         plan.cost += sp.cost
 
     plan.blocks = _merge_blocks(plan.slots)
-    return plan
 
 
 def _merge_blocks(slot_plans: list[SlotPlan]) -> list[dict[str, Any]]:
@@ -513,8 +617,14 @@ def plan_summary(plan: ChargePlan, tz: tzinfo, max_len: int = 255) -> str:
     """Short human-readable plan, suitable for a sensor state (<= 255 chars)."""
     if plan.requested_kwh <= ENERGY_EPS_KWH:
         return "Daily amount reached"
+    deferral = (
+        f"{plan.deferred_kwh:.1f} kWh deferred to tomorrow "
+        f"(est. {plan.deferred_cost:.2f} instead of {plan.avoided_cost:.2f})"
+        if plan.deferred_kwh > ENERGY_EPS_KWH
+        else ""
+    )
     if not plan.blocks:
-        return "No charging possible before deadline"
+        return deferral or "No charging possible before deadline"
     parts = []
     for b in plan.blocks:
         solar_pct = round(100 * b["solar_kwh"] / b["kwh"]) if b["kwh"] > 0 else 0
@@ -523,6 +633,8 @@ def plan_summary(plan: ChargePlan, tz: tzinfo, max_len: int = 255) -> str:
             f"{_hhmm(b['start'], tz)}–{_hhmm(b['end'], tz)} {b['kwh']:.1f} kWh{src}"
         )
     tail = f" · est. cost {plan.cost:.2f}"
+    if deferral:
+        tail += f" · {deferral}"
     if plan.shortfall_kwh > ENERGY_EPS_KWH:
         tail += f" · short {plan.shortfall_kwh:.1f} kWh"
     text = ", ".join(parts)
@@ -542,6 +654,9 @@ def plan_attributes(plan: ChargePlan, tz: tzinfo) -> dict[str, Any]:
         "requested_kwh": round(plan.requested_kwh, 2),
         "planned_kwh": round(plan.planned_kwh, 2),
         "shortfall_kwh": round(plan.shortfall_kwh, 2),
+        "deferred_kwh": round(plan.deferred_kwh, 2),
+        "deferred_cost": round(plan.deferred_cost, 2),
+        "deferred_avoided_cost": round(plan.avoided_cost, 2),
         "planned_solar_kwh": round(plan.solar_kwh, 2),
         "planned_grid_kwh": round(plan.grid_kwh, 2),
         "estimated_cost": round(plan.cost, 2),
@@ -588,6 +703,10 @@ class DailyEnergyTracker:
 
     window_start: datetime | None = None
     delivered_kwh: float = 0.0
+    # Energy deferred by the previous window, added to this window's amount
+    carry_over_kwh: float = 0.0
+    # Energy the current plan defers to the next window
+    deferred_kwh: float = 0.0
     last_meter_kwh: float | None = None
     last_update: datetime | None = None
     last_power_kw: float = 0.0
@@ -600,6 +719,8 @@ class DailyEnergyTracker:
         if self.window_start != window_utc:
             self.window_start = window_utc
             self.delivered_kwh = 0.0
+            self.carry_over_kwh = self.deferred_kwh
+            self.deferred_kwh = 0.0
 
         if meter_kwh is not None:
             if self.last_meter_kwh is not None:
@@ -620,6 +741,8 @@ class DailyEnergyTracker:
                 self.window_start.isoformat() if self.window_start else None
             ),
             "delivered_kwh": self.delivered_kwh,
+            "carry_over_kwh": self.carry_over_kwh,
+            "deferred_kwh": self.deferred_kwh,
             "last_meter_kwh": self.last_meter_kwh,
             "last_update": self.last_update.isoformat() if self.last_update else None,
             "last_power_kw": self.last_power_kw,
@@ -630,6 +753,8 @@ class DailyEnergyTracker:
         return cls(
             window_start=to_utc(data.get("window_start")),
             delivered_kwh=float(data.get("delivered_kwh") or 0.0),
+            carry_over_kwh=float(data.get("carry_over_kwh") or 0.0),
+            deferred_kwh=float(data.get("deferred_kwh") or 0.0),
             last_meter_kwh=(
                 float(data["last_meter_kwh"])
                 if data.get("last_meter_kwh") is not None

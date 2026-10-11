@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.const import UnitOfElectricCurrent, UnitOfEnergy, UnitOfPower
+from homeassistant.const import (
+    PERCENTAGE,
+    UnitOfElectricCurrent,
+    UnitOfEnergy,
+    UnitOfPower,
+)
 
 from .entity import EVChargerManagerEntity
 
@@ -31,6 +36,7 @@ async def async_setup_entry(
         EVChargerDeadbandNumber(coordinator),
         EVChargerDailyKwhNumber(coordinator),
         EVChargerDailyResetHourNumber(coordinator),
+        EVChargerDeferMinSavingNumber(coordinator),
     ]
     if coordinator.forecast_solar_entities:
         entities.append(EVChargerBaseLoadNumber(coordinator))
@@ -210,4 +216,27 @@ class EVChargerDailyResetHourNumber(EVChargerManagerEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         self.coordinator.daily_reset_hour = int(round(value))
+        await self.coordinator.async_request_refresh()
+
+
+class EVChargerDeferMinSavingNumber(EVChargerManagerEntity, NumberEntity):
+    """How much cheaper tomorrow must be before today's charging is deferred."""
+
+    _attr_icon = "mdi:calendar-arrow-right"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 5
+    _attr_mode = NumberMode.BOX
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_translation_key = "defer_min_saving"
+
+    def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        super().__init__(coordinator, unique_id_suffix="defer_min_saving")
+
+    @property
+    def native_value(self) -> float:
+        return float(self.coordinator.defer_min_saving)
+
+    async def async_set_native_value(self, value: float) -> None:
+        self.coordinator.defer_min_saving = float(round(value))
         await self.coordinator.async_request_refresh()
