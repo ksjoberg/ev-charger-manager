@@ -8,7 +8,10 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_change,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -72,11 +75,19 @@ from .planner import (
     plan_energy,
     plan_slots_raw,
     plan_summary,
+    price_at,
 )
 from .solar import read_solar_forecast, solar_forecast_at
 
+# Charge modes whose decisions depend on electricity prices
+PRICE_MODES = (
+    ChargeMode.MINIMIZE_COST,
+    ChargeMode.SOLAR_PRICE_BLEND,
+    ChargeMode.FIXED_DAILY_AMOUNT,
+)
+
 if TYPE_CHECKING:
-    from homeassistant.core import HomeAssistant
+    from homeassistant.core import Event, EventStateChangedData, HomeAssistant
 
     from .data import EVChargerManagerConfigEntry
 
@@ -99,6 +110,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         self.config_entry = entry
         self._tracker = DailyEnergyTracker()
         self._warned_no_price_series = False
+        self._waiting_for_prices = False
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
@@ -115,6 +127,20 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 self.hass, self._async_slot_boundary, minute=(0, 15, 30, 45), second=5
             )
         )
+        # Re-plan as soon as missing prices arrive (e.g. after startup)
+        price_entities = [
+            e for e in (self.nordpool_import_entity, self.nordpool_export_entity) if e
+        ]
+        if price_entities:
+            self.config_entry.async_on_unload(
+                async_track_state_change_event(
+                    self.hass, price_entities, self._async_price_changed
+                )
+            )
+
+    async def _async_price_changed(self, _event: Event[EventStateChangedData]) -> None:
+        if self._waiting_for_prices:
+            await self.async_request_refresh()
 
     async def _async_slot_boundary(self, _now: datetime) -> None:
         await self.async_request_refresh()
@@ -420,7 +446,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 if not import_series and not self._warned_no_price_series:
                     LOGGER.warning(
                         "No price schedule found in the attributes of %s; "
-                        "planning will assume the current price for every slot",
+                        "price-based charge modes will wait until it is available",
                         self.nordpool_import_entity,
                     )
                 self._warned_no_price_series = not import_series
@@ -461,7 +487,8 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         # --- Energy delivered within the current daily window ---
         window_start = _daily_window_start(now, self.daily_reset_hour)
         self._tracker.update(now, window_start, self._read_charger_energy_kwh())
-        self._tracker.deferred_kwh = 0.0  # set again below if the plan defers
+        if self.current_mode != ChargeMode.FIXED_DAILY_AMOUNT:
+            self._tracker.deferred_kwh = 0.0  # the plan sets it in that mode
         result.daily_delivered_kwh = round(self._tracker.delivered_kwh, 2)
 
         # --- Hours needed at max current ---
@@ -472,10 +499,25 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         # --- Determine target current ---
         mode = self.current_mode
 
+        # Price-based modes pause instead of treating missing prices as free
+        # or flat, e.g. at startup before the price integration has loaded.
+        missing_prices = (
+            self._missing_price_entities(result, import_series, now)
+            if mode in PRICE_MODES
+            else []
+        )
+        self._waiting_for_prices = bool(missing_prices)
+
         # Stop immediately when EV has reached its target SoC
         if result.ev_kwh_needed is not None and result.ev_kwh_needed <= 0:
             decision = ChargeDecision(
                 target_current=0.0, reason="EV has reached target SoC – stopping"
+            )
+
+        elif missing_prices:
+            decision = ChargeDecision(
+                target_current=0.0,
+                reason=f"Waiting for price data from {', '.join(missing_prices)}",
             )
 
         elif mode == ChargeMode.ASAP:
@@ -691,6 +733,22 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         else:
             return None
         return max(0.0, surplus)
+
+    def _missing_price_entities(
+        self,
+        result: EVChargerData,
+        import_series: list[PriceInterval],
+        now: datetime,
+    ) -> list[str]:
+        """Return configured price sensors that have no usable price right now."""
+        missing = []
+        if self.nordpool_import_entity and (
+            result.current_import_price is None or price_at(import_series, now) is None
+        ):
+            missing.append(self.nordpool_import_entity)
+        if self.nordpool_export_entity and result.current_export_price is None:
+            missing.append(self.nordpool_export_entity)
+        return missing
 
     def _read_charger_energy_kwh(self) -> float | None:
         """Read the optional charger energy meter in kWh."""
