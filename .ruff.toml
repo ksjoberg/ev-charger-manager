@@ -13,6 +13,8 @@ ignore = [
     "D212", # multi-line-summary-first-line (incompatible with formatter)
     "COM812", # incompatible with formatter
     "ISC001", # incompatible with formatter
+    "CPY001", # missing-copyright-notice (stable since ruff 0.16)
+    "PLR0917", # too-many-positional-arguments (stable since ruff 0.16)
     # Also ignored by Home Assistant core
     "E501", # line-too-long (handled by the formatter)
     "PLR0912", # too-many-branches
