@@ -27,8 +27,6 @@ CONF_CHARGER_ENERGY_ENTITY = "charger_energy_entity"
 
 # Options keys (stored in entry.options, changeable at runtime)
 CONF_CHARGE_MODE = "charge_mode"
-CONF_CHARGE_HOURS = "charge_hours_needed"
-CONF_PRICE_AWARENESS = "price_awareness"
 CONF_CHARGE_DEADBAND = "charge_deadband"
 CONF_DAILY_KWH = "daily_kwh"
 CONF_DAILY_RESET_HOUR = "daily_reset_hour"
@@ -39,8 +37,6 @@ DEFAULT_MIN_CURRENT = 6
 DEFAULT_MAX_CURRENT = 16
 DEFAULT_PHASES = 1
 DEFAULT_VOLTAGE = 230
-DEFAULT_CHARGE_HOURS = 4
-DEFAULT_PRICE_AWARENESS = 0.5
 DEFAULT_CHARGE_DEADBAND = 1.0
 DEFAULT_BASE_LOAD_W = 500
 DEFAULT_DAILY_KWH = 10.0
@@ -56,20 +52,12 @@ class ChargeMode(StrEnum):
 
     ASAP = "asap"
     SOLAR_EXCESS = "solar_excess"
-    MINIMIZE_COST = "minimize_cost"
-    SOLAR_PRICE_BLEND = "solar_price_blend"
     FIXED_DAILY_AMOUNT = "fixed_daily_amount"
 
 
 CHARGE_MODES = [
     ChargeMode.ASAP,
     ChargeMode.SOLAR_EXCESS,
-    ChargeMode.MINIMIZE_COST,
-    ChargeMode.SOLAR_PRICE_BLEND,
     ChargeMode.FIXED_DAILY_AMOUNT,
 ]
 DEFAULT_CHARGE_MODE = ChargeMode.ASAP
-
-# Attribute names tried when reading hourly prices from Nordpool-style sensors
-NORDPOOL_PRICE_ATTRS = ("today", "raw_today", "prices_today", "prices")
-NORDPOOL_TOMORROW_ATTRS = ("tomorrow", "raw_tomorrow", "prices_tomorrow")

@@ -1,13 +1,12 @@
 # EV Charger Manager
 
-A Home Assistant custom integration that controls an EV charge box by adjusting its allowed charge current based on one of three selectable strategies: charge as fast as possible, use only excess solar power, or minimize electricity cost using Nordpool spot prices.
+A Home Assistant custom integration that controls an EV charge box by adjusting its allowed charge current based on one of three selectable strategies: charge as fast as possible, use only excess solar power, or charge a fixed amount per day at the lowest cost using solar forecasts and Nordpool spot prices.
 
 ## Features
 
 - **Three charge modes** selectable from a standard HA `select` entity:
   - **ASAP** – always charges at the configured maximum current
   - **Solar excess** – sets the current proportional to estimated (or measured) solar surplus; pauses when there is insufficient excess
-  - **Minimize cost** – charges only during the cheapest *N* hours of the day based on Nordpool spot prices; pauses during expensive hours
   - **Fixed daily amount** – plans and executes the cheapest way to charge a configured number of kWh per day, combining solar forecast, import/export prices and household base load
 - **Solar estimation** from sun geometry (latitude/longitude) and weather conditions — no extra hardware required. When a grid-power sensor is connected, measured solar export is used instead of the estimate.
 - **Nordpool compatibility** — works with both the unofficial [Nordpool HACS integration](https://github.com/custom-components/nordpool) and the official Nordpool integration; any sensor whose state is the current spot price per kWh is accepted.
@@ -21,7 +20,6 @@ A Home Assistant custom integration that controls an EV charge box by adjusting 
 | Charge mode | `select` | Active charging strategy |
 | Minimum charge current | `number` | Lower current bound (A) |
 | Maximum charge current | `number` | Upper current bound (A) |
-| Cheap hours needed | `number` | Target cheap-hour count for Minimize Cost mode |
 | Applied charge current | `sensor` | Current being written to the charger |
 | Estimated solar power | `sensor` | Estimated PV output in kW |
 | Current spot price | `sensor` | Price read from the Nordpool sensor |
@@ -39,7 +37,7 @@ A Home Assistant custom integration that controls an EV charge box by adjusting 
 - Home Assistant 2026.3.2 or newer
 - A charger that exposes its allowed charge current as a HA `number` entity (e.g. via the Easee, OCPP, or similar integration)
 - For Solar excess mode: a `weather` entity at or near the installation site
-- For Minimize Cost mode: a Nordpool (or compatible) spot price sensor
+- For Fixed daily amount mode: a Nordpool (or compatible) spot price sensor
 
 ## Installation via HACS
 
@@ -94,9 +92,6 @@ Estimates available solar power from:
 Available current = `solar_power_kW × 1000 / (phases × voltage)`
 
 If a grid-power sensor is configured, the measured grid export replaces the solar estimate. Charging pauses when the available current falls below `min_current`.
-
-### Minimize cost
-Collects hourly prices from today and tomorrow (when available). Charges at `max_current` during the *N* cheapest hours and pauses during the rest, where *N* is the **Cheap hours needed** number entity. If no price data is available, falls back to charging at `max_current`.
 
 ### Fixed daily amount
 Charges a fixed number of kWh (the **Fixed daily amount** number entity) within each daily window at the lowest estimated cost. The window starts at the **Daily window start hour** (default 00:00, i.e. the calendar day) and the amount is due before the next window starts. The amount is capped by the kWh still needed to reach the EV's target SoC when the EV battery entities are configured.

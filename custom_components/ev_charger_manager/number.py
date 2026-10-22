@@ -32,7 +32,6 @@ async def async_setup_entry(
     entities: list[NumberEntity] = [
         EVChargerMinCurrentNumber(coordinator),
         EVChargerMaxCurrentNumber(coordinator),
-        EVChargerPriceAwarenessNumber(coordinator),
         EVChargerDeadbandNumber(coordinator),
         EVChargerDailyKwhNumber(coordinator),
         EVChargerDailyResetHourNumber(coordinator),
@@ -92,31 +91,6 @@ class EVChargerMaxCurrentNumber(EVChargerManagerEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Store the new value and refresh the coordinator."""
         self.coordinator.max_current = float(round(value))
-        await self.coordinator.async_request_refresh()
-
-
-class EVChargerPriceAwarenessNumber(EVChargerManagerEntity, NumberEntity):
-    """Blend factor controlling how much cheap-hour price boosts the charge current."""
-
-    _attr_icon = "mdi:cash-clock"
-    _attr_native_min_value = 0.0
-    _attr_native_max_value = 1.0
-    _attr_native_step = 0.05
-    _attr_mode = NumberMode.SLIDER
-    _attr_translation_key = "price_awareness"
-
-    def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
-        """Initialize the number entity."""
-        super().__init__(coordinator, unique_id_suffix="price_awareness")
-
-    @property
-    def native_value(self) -> float:
-        """Return the current value."""
-        return float(self.coordinator.price_awareness)
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Store the new value and refresh the coordinator."""
-        self.coordinator.price_awareness = round(float(value), 2)
         await self.coordinator.async_request_refresh()
 
 

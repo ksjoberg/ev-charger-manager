@@ -74,32 +74,3 @@ def solar_forecast_at(
     if gap > max_gap.total_seconds():
         return None
     return solar_forecast[best_dt]
-
-
-def build_effective_prices(
-    today_prices: list[float],
-    tomorrow_prices: list[float],
-    solar_forecast: dict[datetime, float],
-    export_price: float,
-    min_charging_kw: float,
-    slots_per_hour: int,
-    today_start: datetime,
-) -> list[float]:
-    """
-    Build an effective price list substituting export_price for solar-covered slots.
-
-    For each slot in today_prices + tomorrow_prices, if the solar forecast at that
-    slot's time is >= min_charging_kw, the effective price is export_price (opportunity
-    cost of not exporting), otherwise it's the import price.
-    """
-    slot_duration = timedelta(minutes=60 // slots_per_hour)
-    effective: list[float] = []
-    all_prices = today_prices + tomorrow_prices
-    for i, price in enumerate(all_prices):
-        slot_time = today_start + i * slot_duration
-        solar_kw = solar_forecast_at(solar_forecast, slot_time) or 0.0
-        if solar_kw >= min_charging_kw:
-            effective.append(export_price)
-        else:
-            effective.append(price)
-    return effective

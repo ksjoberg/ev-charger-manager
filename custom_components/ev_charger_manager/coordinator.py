@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import itertools
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -20,11 +19,10 @@ from .charge_strategy import (
     ChargeDecision,
     strategy_asap,
     strategy_fixed_daily_amount,
-    strategy_minimize_cost,
     strategy_solar_excess,
-    strategy_solar_price_blend,
 )
 from .const import (
+    CHARGE_MODES,
     CONF_BASE_LOAD_W,
     CONF_CHARGE_DEADBAND,
     CONF_CHARGE_MODE,
@@ -43,12 +41,10 @@ from .const import (
     CONF_NORDPOOL_EXPORT_ENTITY,
     CONF_NORDPOOL_IMPORT_ENTITY,
     CONF_PHASES,
-    CONF_PRICE_AWARENESS,
     CONF_PV_POWER_ENTITY,
     CONF_VOLTAGE,
     DEFAULT_BASE_LOAD_W,
     DEFAULT_CHARGE_DEADBAND,
-    DEFAULT_CHARGE_HOURS,
     DEFAULT_CHARGE_MODE,
     DEFAULT_DAILY_KWH,
     DEFAULT_DAILY_RESET_HOUR,
@@ -56,12 +52,9 @@ from .const import (
     DEFAULT_MAX_CURRENT,
     DEFAULT_MIN_CURRENT,
     DEFAULT_PHASES,
-    DEFAULT_PRICE_AWARENESS,
     DEFAULT_VOLTAGE,
     DOMAIN,
     LOGGER,
-    NORDPOOL_PRICE_ATTRS,
-    NORDPOOL_TOMORROW_ATTRS,
     UPDATE_INTERVAL_MINUTES,
     ChargeMode,
 )
@@ -78,13 +71,6 @@ from .planner import (
     price_at,
 )
 from .solar import read_solar_forecast, solar_forecast_at
-
-# Charge modes whose decisions depend on electricity prices
-PRICE_MODES = (
-    ChargeMode.MINIMIZE_COST,
-    ChargeMode.SOLAR_PRICE_BLEND,
-    ChargeMode.FIXED_DAILY_AMOUNT,
-)
 
 if TYPE_CHECKING:
     from homeassistant.core import Event, EventStateChangedData, HomeAssistant
@@ -180,20 +166,6 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         self.hass.config_entries.async_update_entry(
             self.config_entry,
             options={**self.config_entry.options, CONF_MAX_CURRENT: value},
-        )
-
-    @property
-    def price_awareness(self) -> float:
-        """Return the price-awareness blend factor."""
-        return float(
-            self.config_entry.options.get(CONF_PRICE_AWARENESS, DEFAULT_PRICE_AWARENESS)
-        )
-
-    @price_awareness.setter
-    def price_awareness(self, value: float) -> None:
-        self.hass.config_entries.async_update_entry(
-            self.config_entry,
-            options={**self.config_entry.options, CONF_PRICE_AWARENESS: value},
         )
 
     @property
@@ -330,9 +302,9 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
     @property
     def current_mode(self) -> ChargeMode:
         """Return the active charge mode."""
-        return ChargeMode(
-            self.config_entry.options.get(CONF_CHARGE_MODE, DEFAULT_CHARGE_MODE)
-        )
+        mode = self.config_entry.options.get(CONF_CHARGE_MODE, DEFAULT_CHARGE_MODE)
+        # Entries may still hold a mode that has since been removed
+        return ChargeMode(mode) if mode in CHARGE_MODES else DEFAULT_CHARGE_MODE
 
     @current_mode.setter
     def current_mode(self, mode: ChargeMode) -> None:
@@ -409,18 +381,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                         gp_state.state,
                     )
 
-        # Available solar excess: grid export if measured, else effective solar
-        solar_excess_kw = (
-            result.grid_export_kw
-            if result.grid_export_kw is not None
-            else effective_solar_kw
-        )
-
         # --- Nordpool import price ---
-        slots_per_hour = 1
-        today_prices: list[float] = []
-        tomorrow_prices: list[float] = []
-        future_prices: list[float] = []
         import_series: list[PriceInterval] = []
         export_series: list[PriceInterval] = []
         today_start = dt_util.start_of_local_day(now)
@@ -441,29 +402,16 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                         np_state.state,
                     )
 
-                attrs = np_state.attributes
-                import_series = parse_price_series(dict(attrs), *day_starts)
+                import_series = parse_price_series(
+                    dict(np_state.attributes), *day_starts
+                )
                 if not import_series and not self._warned_no_price_series:
                     LOGGER.warning(
                         "No price schedule found in the attributes of %s; "
-                        "price-based charge modes will wait until it is available",
+                        "Fixed Daily Amount mode will wait until it is available",
                         self.nordpool_import_entity,
                     )
                 self._warned_no_price_series = not import_series
-                today_prices = _extract_price_list(attrs, NORDPOOL_PRICE_ATTRS)
-                tomorrow_prices = _extract_price_list(attrs, NORDPOOL_TOMORROW_ATTRS)
-                if not today_prices and import_series:
-                    # Timestamped mappings ({start: price}) only parse as a series
-                    utc_bounds = [dt_util.as_utc(d) for d in day_starts]
-                    today_prices, tomorrow_prices = (
-                        [iv.value for iv in import_series if lo <= iv.start < hi]
-                        for lo, hi in itertools.pairwise(utc_bounds)
-                    )
-                result.hourly_prices = today_prices + tomorrow_prices
-                if len(today_prices) >= 20:
-                    slots_per_hour = max(1, round(len(today_prices) / 24))
-                current_slot = now.hour * slots_per_hour
-                future_prices = result.hourly_prices[current_slot:]
 
         # --- Nordpool export price ---
         if self.nordpool_export_entity:
@@ -499,11 +447,11 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         # --- Determine target current ---
         mode = self.current_mode
 
-        # Price-based modes pause instead of treating missing prices as free
+        # Fixed Daily Amount pauses instead of treating missing prices as free
         # or flat, e.g. at startup before the price integration has loaded.
         missing_prices = (
             self._missing_price_entities(result, import_series, now)
-            if mode in PRICE_MODES
+            if mode == ChargeMode.FIXED_DAILY_AMOUNT
             else []
         )
         self._waiting_for_prices = bool(missing_prices)
@@ -536,31 +484,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 ev_charging_kw=ev_charging_kw,
             )
 
-        elif mode == ChargeMode.SOLAR_PRICE_BLEND:
-            prev_current = self.data.applied_current if self.data else 0.0
-            ev_charging_kw = (prev_current * self.phases * self.voltage) / 1000.0
-            hours = (
-                result.charge_hours_needed
-                if result.charge_hours_needed is not None
-                else DEFAULT_CHARGE_HOURS
-            )
-            charge_slots = max(1, round(hours * slots_per_hour))
-            decision = strategy_solar_price_blend(
-                solar_power_kw=effective_solar_kw,
-                min_current=self.min_current,
-                max_current=self.max_current,
-                phases=self.phases,
-                voltage=self.voltage,
-                price_awareness=self.price_awareness,
-                current_price=result.current_import_price or 0.0,
-                hourly_prices=future_prices or result.hourly_prices,
-                charge_hours_needed=charge_slots,
-                grid_export_kw=result.grid_export_kw,
-                ev_charging_kw=ev_charging_kw,
-                hourly_solar_forecast=result.hourly_solar_forecast or None,
-            )
-
-        elif mode == ChargeMode.FIXED_DAILY_AMOUNT:
+        else:  # FIXED_DAILY_AMOUNT
             remaining_kwh = max(
                 0.0,
                 self.daily_kwh
@@ -649,55 +573,6 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 "raw_tomorrow": plan_slots_raw(next_plan, tz, watts_per_amp),
                 "tomorrow_valid": next_plan is not None,
             }
-
-        else:  # MINIMIZE_COST
-            hours = (
-                result.charge_hours_needed
-                if result.charge_hours_needed is not None
-                else DEFAULT_CHARGE_HOURS
-            )
-            charge_slots = max(1, round(hours * slots_per_hour))
-            min_charging_kw = (self.min_current * self.phases * self.voltage) / 1000.0
-
-            decision = strategy_minimize_cost(
-                current_price=result.current_import_price or 0.0,
-                hourly_prices=future_prices or result.hourly_prices,
-                min_current=self.min_current,
-                max_current=self.max_current,
-                charge_hours_needed=charge_slots,
-                phases=self.phases,
-                voltage=self.voltage,
-                hourly_solar_forecast=result.hourly_solar_forecast or None,
-                solar_excess_kw=solar_excess_kw,
-                export_price=result.current_export_price,
-            )
-
-            # Build session plan string for MINIMIZE_COST
-            if today_prices:
-                current_slot_in_today = now.hour * slots_per_hour
-                ep: list[float] = []
-                all_prices = today_prices + tomorrow_prices
-                for i, price in enumerate(all_prices):
-                    fi_hour = (i - current_slot_in_today) // slots_per_hour
-                    solar_kw = (
-                        result.hourly_solar_forecast[fi_hour]
-                        if result.hourly_solar_forecast
-                        and 0 <= fi_hour < len(result.hourly_solar_forecast)
-                        else 0.0
-                    )
-                    ep.append(
-                        result.current_export_price
-                        if solar_kw >= min_charging_kw
-                        and result.current_export_price is not None
-                        else price
-                    )
-                result.charge_plan = _session_plan(
-                    ep,
-                    charge_slots,
-                    len(today_prices),
-                    current_slot_in_today,
-                    slots_per_hour,
-                )
 
         # Round to whole amperes; apply dead-band to suppress minor fluctuations
         target_amps = round(decision.target_current)
@@ -843,48 +718,6 @@ def _daily_window_start(now: datetime, reset_hour: int) -> datetime:
     return start
 
 
-def _session_plan(
-    effective_prices: list[float],
-    charge_slots: int,
-    today_slot_count: int,
-    current_slot_index: int,
-    slots_per_hour: int,
-) -> str:
-    """
-    Summarise the charge session plan as a human-readable string.
-
-    effective_prices covers today_prices + tomorrow_prices, with export_price
-    already substituted for solar-covered slots. charge_slots is already scaled
-    for sub-hourly granularity.
-    """
-    if not effective_prices or charge_slots <= 0:
-        return ""
-
-    n = max(1, min(charge_slots, len(effective_prices)))
-    sorted_prices = sorted(effective_prices)
-    threshold = sorted_prices[n - 1]
-
-    future_today: list[int] = []
-    tomorrow_all: list[int] = []
-    for i, p in enumerate(effective_prices):
-        if i < today_slot_count:
-            if i >= current_slot_index and p <= threshold:
-                future_today.append(i)
-        elif p <= threshold:
-            tomorrow_all.append(i)
-
-    today_hours = len(future_today) / slots_per_hour
-    tomorrow_hours = len(tomorrow_all) / slots_per_hour
-
-    if today_hours <= 0 and tomorrow_hours > 0:
-        return f"Session deferred to tomorrow ({tomorrow_hours:.1f} h planned)"
-    if today_hours > 0 and tomorrow_hours > 0:
-        return f"Today {today_hours:.1f} h + tomorrow {tomorrow_hours:.1f} h"
-    if today_hours > 0:
-        return f"Today {today_hours:.1f} h planned"
-    return "No cheap slots found in price window"
-
-
 def _extract_solar_forecast(
     hass: HomeAssistant,
     entity_ids: list[str],
@@ -946,25 +779,3 @@ def _extract_solar_forecast(
         else:
             result.append(0.0)
     return result
-
-
-def _extract_price_list(
-    attrs: dict[str, Any], candidate_keys: tuple[str, ...]
-) -> list[float]:
-    """Try each key in order; return the first list of numeric values found."""
-    for key in candidate_keys:
-        raw = attrs.get(key)
-        if not raw:
-            continue
-        if isinstance(raw, list):
-            prices = []
-            for item in raw:
-                if isinstance(item, dict):
-                    val = item.get("value") or item.get("price")
-                else:
-                    val = item
-                with contextlib.suppress(TypeError, ValueError):
-                    prices.append(float(val))
-            if prices:
-                return prices
-    return []
