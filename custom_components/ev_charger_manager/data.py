@@ -32,7 +32,6 @@ class EVChargerData:
     solar_forecast_kw: float | None = None
     current_import_price: float | None = None
     current_export_price: float | None = None
-    hourly_prices: list[float] = field(default_factory=list)
     applied_current: float = 0.0
     charge_reason: str = ""
     charge_reason_attributes: dict[str, Any] = field(default_factory=dict)
