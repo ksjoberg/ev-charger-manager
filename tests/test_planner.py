@@ -93,6 +93,22 @@ def test_opportunistic_allowance_is_cumulative_and_soc_capped():
     assert S.opportunistic_kwh_remaining(10, 8, 5, 2, None) == pytest.approx(5)
 
 
+def test_fixed_daily_amount_is_capped_by_soc_targets():
+    assert S.fixed_daily_kwh_remaining(10, 0, 0, 8, 3) == pytest.approx(3)
+    assert S.fixed_daily_kwh_remaining(10, 0, 0, 3, 8) == pytest.approx(3)
+    assert S.fixed_daily_kwh_remaining(10, 0, 0, None, None) == pytest.approx(10)
+    assert S.fixed_daily_kwh_remaining(10, 0, 0, 8, 0) == pytest.approx(0)
+    assert S.fixed_daily_kwh_remaining(10, 2, 3, 8, 6) == pytest.approx(6)
+
+
+def test_opportunistic_energy_can_fill_above_fixed_daily_target_to_ev_target():
+    remaining_base_kwh = S.fixed_daily_kwh_remaining(10, 0, 0, 14, 4)
+
+    assert S.opportunistic_kwh_remaining(
+        10, 0, 20, remaining_base_kwh, 14
+    ) == pytest.approx(10)
+
+
 def test_opportunistic_energy_is_scheduled_in_future_qualifying_slots():
     slots = [
         P.PlanSlot(DAY, DAY + timedelta(hours=1), 1.5, 0.5, 0.0),

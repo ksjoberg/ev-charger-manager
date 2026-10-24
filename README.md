@@ -25,13 +25,14 @@ A Home Assistant custom integration that controls an EV charge box by adjusting 
 | Current spot price | `sensor` | Price read from the Nordpool sensor |
 | Charge decision reason | `sensor` | Human-readable explanation of the last decision |
 | Fixed daily amount | `number` | kWh to charge per daily window (Fixed daily amount mode) |
+| Fixed daily target SoC | `number` | SoC ceiling for the fixed daily amount; requires EV battery capacity and current SoC entities |
 | Daily window start hour | `number` | Local hour when the daily window starts; the amount is due before the next one |
 | Defer to tomorrow: minimum saving | `number` | How much cheaper (%) tomorrow must be before today's charging is deferred; 100 % disables |
 | Opportunistic import price threshold | `number` | All-in import price, in the same units as the configured import price sensor, that qualifies for extra charging in Fixed Daily Amount mode |
 | Opportunistic extra energy | `number` | Additional kWh allowed per daily window when the threshold is met; 0 disables |
 | Charge session plan | `sensor` | Summary of the planned charging blocks; full per-slot schedule in attributes |
 | Energy charged in daily window | `sensor` | kWh delivered since the window started |
-| Daily amount remaining | `sensor` | kWh still planned in this window (capped by kWh to target SoC) |
+| Daily amount remaining | `sensor` | kWh still planned in this window (capped by the fixed daily and EV SoC targets) |
 | Planned charging cost | `sensor` | Estimated cost of the remaining plan |
 
 ## Requirements
@@ -96,7 +97,7 @@ Available current = `solar_power_kW × 1000 / (phases × voltage)`
 If a grid-power sensor is configured, the measured grid export replaces the solar estimate. Charging pauses when the available current falls below `min_current`.
 
 ### Fixed daily amount
-Charges a fixed number of kWh (the **Fixed daily amount** number entity) within each daily window at the lowest estimated cost. The window starts at the **Daily window start hour** (default 00:00, i.e. the calendar day) and the amount is due before the next window starts. The amount is capped by the kWh still needed to reach the EV's target SoC when the EV battery entities are configured.
+Charges a fixed number of kWh (the **Fixed daily amount** number entity) within each daily window at the lowest estimated cost. The window starts at the **Daily window start hour** (default 00:00, i.e. the calendar day) and the amount is due before the next window starts. The base amount is capped by the lower of the **Fixed daily target SoC** number entity and the EV's target SoC. The fixed daily target defaults to 100%; set it lower to reserve battery capacity for opportunistic charging. Applying the limit requires EV battery capacity and current SoC entities.
 
 **Cost model.** The window is split into the price slots of the import price sensor (15 min or 1 h). For each slot:
 
@@ -110,7 +111,7 @@ Self-consuming solar is therefore always preferred within a slot, but solar is e
 
 **Execution.** The plan is rebuilt every 5 minutes and at every quarter-hour for the kWh still missing. For the current slot, the measured surplus (from the grid and PV sensors, when configured) replaces the forecast. The current slot's planned energy is converted to a charge current; when that is below the minimum current, the slot is charged at the minimum current and stopped once its share is delivered.
 
-**Opportunistic charging.** In Fixed Daily Amount mode only, the **Opportunistic import price threshold** and **Opportunistic extra energy** number entities allow extra charging in published price slots whose all-in import price is at or below the threshold. Enter the threshold in the same units as the configured import price sensor. Extra energy is planned into qualifying future slots, preferring lower-cost forecast solar, and is cumulative within one daily window on top of the normal daily amount. The allowance defaults to 0 kWh, and the EV target SoC remains a hard cap.
+**Opportunistic charging.** In Fixed Daily Amount mode only, the **Opportunistic import price threshold** and **Opportunistic extra energy** number entities allow extra charging in published price slots whose all-in import price is at or below the threshold. Enter the threshold in the same units as the configured import price sensor. Extra energy is planned into qualifying future slots, preferring lower-cost forecast solar, and is cumulative within one daily window on top of the normal daily amount. It can charge beyond the **Fixed daily target SoC** to the configured EV target SoC, which remains a hard cap. The allowance defaults to 0 kWh.
 
 **Deferring to tomorrow.** Next-day prices are published in the early afternoon (around 13:00–13:30 CET). Once the next window's prices are known, the planner first reserves the next window's own daily amount. It then checks whether that window's remaining capacity can supply some of today's kWh at least the configured saving cheaper (default 50 %). For example, at 50 % a kWh costing 2.00 today is moved only if it costs at most 1.00 tomorrow. Today's most expensive kWh are given up first, so a cheap solar slot today can be kept while an expensive evening slot is dropped. Deferred energy is added to the next window's amount. Only published prices are used for this, and energy that doesn't fit today at all is never deferred.
 
