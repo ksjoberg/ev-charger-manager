@@ -533,10 +533,26 @@ def plan_energy(
     return plan
 
 
-def add_energy_at_or_below_price(
+def _net_price_at_power(slot: PlanSlot, power_kw: float) -> float:
+    """Return the solar/grid blended price at a selected charging power."""
+    if power_kw <= 0:
+        return float("inf")
+    solar_kw = min(max(0.0, slot.surplus_kw), power_kw)
+    return (
+        solar_kw * slot.export_price + (power_kw - solar_kw) * slot.import_price
+    ) / power_kw
+
+
+def add_energy_at_or_below_net_price(
     plan: ChargePlan, energy_kwh: float, price_threshold: float
 ) -> float:
-    """Add extra energy to published plan segments at or below a price threshold."""
+    """
+    Add energy where blended net price stays at or below the threshold.
+
+    Each slot is first evaluated at its existing planned charging power, or
+    minimum power when no charge is planned. Added energy may raise that power
+    only as far as the net price remains within the threshold.
+    """
     if energy_kwh <= ENERGY_EPS_KWH:
         return 0.0
 
@@ -544,22 +560,44 @@ def add_energy_at_or_below_price(
     for slot_index, slot_plan in enumerate(plan.slots):
         if slot_plan.slot.estimated_price:
             continue
-        remaining = slot_plan.energy_kwh
-        for segment_index, (price, segment_kwh) in enumerate(
-            _slot_segments(slot_plan.slot, plan.min_kw, plan.max_kw)
-        ):
-            used = min(remaining, segment_kwh)
-            remaining -= used
-            available = segment_kwh - used
-            if price <= price_threshold and available > ENERGY_EPS_KWH:
-                candidates.append(
-                    (price, slot_plan.slot.start, segment_index, slot_index, available)
-                )
+        slot = slot_plan.slot
+        if slot.hours <= 0 or plan.max_kw <= 0:
+            continue
 
-    candidates.sort(key=lambda item: item[:3])
+        selected_kw = max(plan.min_kw, slot_plan.avg_power_kw)
+        if selected_kw <= 0:
+            selected_kw = plan.max_kw
+        selected_kw = min(selected_kw, plan.max_kw)
+        selected_price = _net_price_at_power(slot, selected_kw)
+        if not selected_price <= price_threshold:
+            continue
+
+        max_price = _net_price_at_power(slot, plan.max_kw)
+        if max_price <= price_threshold:
+            qualifying_kw = plan.max_kw
+        elif slot.export_price > slot.import_price:
+            qualifying_kw = selected_kw
+        else:
+            low_kw, high_kw = selected_kw, plan.max_kw
+            for _ in range(32):
+                mid_kw = (low_kw + high_kw) / 2
+                if _net_price_at_power(slot, mid_kw) <= price_threshold:
+                    low_kw = mid_kw
+                else:
+                    high_kw = mid_kw
+            qualifying_kw = low_kw
+
+        available = max(
+            0.0,
+            qualifying_kw * slot.hours - slot_plan.energy_kwh,
+        )
+        if available > ENERGY_EPS_KWH:
+            candidates.append((selected_price, slot.start, slot_index, available))
+
+    candidates.sort(key=lambda item: item[:2])
     remaining_kwh = energy_kwh
     additions: dict[int, float] = {}
-    for _, _, _, slot_index, available in candidates:
+    for _, _, slot_index, available in candidates:
         if remaining_kwh <= ENERGY_EPS_KWH:
             break
         added = min(remaining_kwh, available)
@@ -810,6 +848,23 @@ def plan_slots_raw(
         }
         for sp in plan.slots
     ]
+
+
+def charge_reason_plan_attributes(
+    plan: ChargePlan,
+    next_plan: ChargePlan | None,
+    tz: tzinfo,
+    watts_per_amp: float,
+    carried_over_kwh: float,
+) -> dict[str, Any]:
+    """Return detailed current and next-window plan attributes for the reason sensor."""
+    return {
+        **plan_attributes(plan, tz),
+        "carried_over_kwh": round(carried_over_kwh, 2),
+        "raw_today": plan_slots_raw(plan, tz, watts_per_amp),
+        "raw_tomorrow": plan_slots_raw(next_plan, tz, watts_per_amp),
+        "tomorrow_valid": next_plan is not None,
+    }
 
 
 # ----------------------------------------------------------------------

@@ -150,6 +150,36 @@ def test_opportunistic_energy_prioritizes_solar_below_price_threshold():
     assert plan.slots[1].solar_kwh == pytest.approx(2.0)
 
 
+def test_opportunistic_energy_uses_net_price_at_selected_current():
+    slot = P.PlanSlot(DAY, DAY + timedelta(hours=1), 2.0, 1.0, 1.5)
+    plan = P.plan_energy([slot], 0, MIN_KW, MAX_KW)
+
+    added = S.add_opportunistic_energy(plan, 1.5, 2.0)
+
+    assert added == pytest.approx(2.0)
+    assert plan.current.avg_power_kw == pytest.approx(2.0)
+    assert plan.current.cost / plan.current.energy_kwh <= 1.5
+
+
+def test_opportunistic_net_price_caps_charge_power_at_threshold():
+    slot = P.PlanSlot(DAY, DAY + timedelta(hours=1), 2.0, 1.0, 1.5)
+    plan = P.plan_energy([slot], 0, MIN_KW, MAX_KW)
+
+    added = S.add_opportunistic_energy(plan, 1.2, 10.0)
+
+    assert added == pytest.approx(1.875)
+    assert plan.current.cost / plan.current.energy_kwh == pytest.approx(1.2)
+
+
+def test_opportunistic_net_price_uses_existing_planned_current():
+    slot = P.PlanSlot(DAY, DAY + timedelta(hours=1), 2.0, 1.0, 1.5)
+    plan = P.plan_energy([slot], 2.1, MIN_KW, MAX_KW)
+
+    added = S.add_opportunistic_energy(plan, 1.2, 1.0)
+
+    assert added == 0
+
+
 def test_opportunistic_energy_uses_only_published_qualifying_price_slots():
     slots = [
         P.PlanSlot(
@@ -668,6 +698,23 @@ def test_raw_slots_report_energy_and_current_per_slot():
     assert raw[-1]["export_price"] == 0.3
     assert "estimated_price" not in raw[-1]
     assert P.plan_slots_raw(None, TZ, V * PH) == []
+
+
+def test_charge_reason_plan_attributes_include_summary_and_slot_detail():
+    slot = P.PlanSlot(DAY, DAY + timedelta(hours=1), 2.0, 1.0, 1.5)
+    plan = P.plan_energy([slot], 2.0, MIN_KW, MAX_KW)
+
+    attrs = P.charge_reason_plan_attributes(plan, None, TZ, V * PH, 0.5)
+
+    assert attrs["requested_kwh"] == pytest.approx(2.0)
+    assert attrs["planned_kwh"] == pytest.approx(2.0)
+    assert attrs["estimated_cost"] == pytest.approx(plan.cost)
+    assert attrs["carried_over_kwh"] == pytest.approx(0.5)
+    assert attrs["blocks"][0]["kwh"] == pytest.approx(2.0)
+    assert attrs["schedule"][0]["kw"] == pytest.approx(2.0)
+    assert attrs["raw_today"][0]["kwh"] == pytest.approx(2.0)
+    assert attrs["raw_tomorrow"] == []
+    assert attrs["tomorrow_valid"] is False
 
 
 def test_raw_slots_split_solar_surplus_and_import():
