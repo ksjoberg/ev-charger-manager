@@ -169,6 +169,12 @@
       },
       "defer_min_saving": {
         "name": "Defer to tomorrow: minimum saving"
+      },
+      "opportunistic_price": {
+        "name": "Opportunistic import price threshold"
+      },
+      "opportunistic_kwh": {
+        "name": "Opportunistic extra energy"
       }
     }
   },

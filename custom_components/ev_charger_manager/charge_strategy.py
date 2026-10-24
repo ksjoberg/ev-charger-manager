@@ -5,12 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .planner import ENERGY_EPS_KWH
+from .planner import ENERGY_EPS_KWH, ChargePlan, future_capacity_below_price
 
 if TYPE_CHECKING:
     from datetime import datetime, tzinfo
-
-    from .planner import ChargePlan
 
 
 @dataclass
@@ -91,6 +89,38 @@ def strategy_solar_excess(
         target_current=round(target, 1),
         reason=(f"Solar excess {available_kw:.2f} kW → charging at {target:.1f} A"),
     )
+
+
+def opportunistic_price_is_eligible(
+    current_import_price: float | None, price_threshold: float
+) -> bool:
+    """Whether the current all-in import price meets the opportunistic threshold."""
+    return current_import_price is not None and current_import_price <= price_threshold
+
+
+def opportunistic_kwh_remaining(
+    daily_target_kwh: float,
+    delivered_kwh: float,
+    allowance_kwh: float,
+    daily_remaining_kwh: float,
+    ev_kwh_needed: float | None,
+) -> float:
+    """Return the unused extra allowance, bounded by remaining EV capacity."""
+    already_extra = max(0.0, delivered_kwh - daily_target_kwh)
+    remaining = max(0.0, allowance_kwh - already_extra)
+    if ev_kwh_needed is not None:
+        remaining = min(remaining, max(0.0, ev_kwh_needed - daily_remaining_kwh))
+    return remaining
+
+
+def opportunistic_energy_now(
+    plan: ChargePlan,
+    current_import_price: float,
+    allowance_remaining_kwh: float,
+) -> tuple[float, float]:
+    """Split extra energy between now and forecast capacity at a lower cost."""
+    future_cheaper_kwh = future_capacity_below_price(plan, current_import_price)
+    return max(0.0, allowance_remaining_kwh - future_cheaper_kwh), future_cheaper_kwh
 
 
 def _hhmm(dt: datetime, tz: tzinfo) -> str:

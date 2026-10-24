@@ -31,6 +31,8 @@ CONF_CHARGE_DEADBAND = "charge_deadband"
 CONF_DAILY_KWH = "daily_kwh"
 CONF_DAILY_RESET_HOUR = "daily_reset_hour"
 CONF_DEFER_MIN_SAVING = "defer_min_saving"
+CONF_OPPORTUNISTIC_PRICE = "opportunistic_price"
+CONF_OPPORTUNISTIC_KWH = "opportunistic_kwh"
 
 # Defaults
 DEFAULT_MIN_CURRENT = 6
@@ -42,6 +44,8 @@ DEFAULT_BASE_LOAD_W = 500
 DEFAULT_DAILY_KWH = 10.0
 DEFAULT_DAILY_RESET_HOUR = 0
 DEFAULT_DEFER_MIN_SAVING = 50  # percent; 100 disables deferral
+DEFAULT_OPPORTUNISTIC_PRICE = 0.0
+DEFAULT_OPPORTUNISTIC_KWH = 0.0
 
 # Update interval in minutes
 UPDATE_INTERVAL_MINUTES = 5

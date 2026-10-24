@@ -36,6 +36,8 @@ async def async_setup_entry(
         EVChargerDailyKwhNumber(coordinator),
         EVChargerDailyResetHourNumber(coordinator),
         EVChargerDeferMinSavingNumber(coordinator),
+        EVChargerOpportunisticPriceNumber(coordinator),
+        EVChargerOpportunisticKwhNumber(coordinator),
     ]
     if coordinator.forecast_solar_entities:
         entities.append(EVChargerBaseLoadNumber(coordinator))
@@ -222,4 +224,55 @@ class EVChargerDeferMinSavingNumber(EVChargerManagerEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Store the new value and refresh the coordinator."""
         self.coordinator.defer_min_saving = float(round(value))
+        await self.coordinator.async_request_refresh()
+
+
+class EVChargerOpportunisticPriceNumber(EVChargerManagerEntity, NumberEntity):
+    """Maximum import price for opportunistic charging."""
+
+    _attr_icon = "mdi:cash-check"
+    _attr_native_min_value = -100.0
+    _attr_native_max_value = 100.0
+    _attr_native_step = 0.01
+    _attr_mode = NumberMode.BOX
+    _attr_translation_key = "opportunistic_price"
+
+    def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        """Initialize the number entity."""
+        super().__init__(coordinator, unique_id_suffix="opportunistic_price")
+
+    @property
+    def native_value(self) -> float:
+        """Return the configured all-in import price threshold."""
+        return float(self.coordinator.opportunistic_price)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Store the threshold and refresh the coordinator."""
+        self.coordinator.opportunistic_price = round(float(value), 2)
+        await self.coordinator.async_request_refresh()
+
+
+class EVChargerOpportunisticKwhNumber(EVChargerManagerEntity, NumberEntity):
+    """Extra energy allowed when the import price meets the threshold."""
+
+    _attr_icon = "mdi:battery-plus"
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 100.0
+    _attr_native_step = 0.1
+    _attr_mode = NumberMode.BOX
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_translation_key = "opportunistic_kwh"
+
+    def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        """Initialize the number entity."""
+        super().__init__(coordinator, unique_id_suffix="opportunistic_kwh")
+
+    @property
+    def native_value(self) -> float:
+        """Return the configured extra energy allowance."""
+        return float(self.coordinator.opportunistic_kwh)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Store the allowance and refresh the coordinator."""
+        self.coordinator.opportunistic_kwh = round(float(value), 1)
         await self.coordinator.async_request_refresh()
