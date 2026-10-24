@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .planner import ENERGY_EPS_KWH, ChargePlan, future_capacity_below_price
+from .planner import (
+    ENERGY_EPS_KWH,
+    ChargePlan,
+    add_energy_at_or_below_price,
+)
 
 if TYPE_CHECKING:
     from datetime import datetime, tzinfo
@@ -91,13 +95,6 @@ def strategy_solar_excess(
     )
 
 
-def opportunistic_price_is_eligible(
-    current_import_price: float | None, price_threshold: float
-) -> bool:
-    """Whether the current all-in import price meets the opportunistic threshold."""
-    return current_import_price is not None and current_import_price <= price_threshold
-
-
 def opportunistic_kwh_remaining(
     daily_target_kwh: float,
     delivered_kwh: float,
@@ -113,14 +110,13 @@ def opportunistic_kwh_remaining(
     return remaining
 
 
-def opportunistic_energy_now(
+def add_opportunistic_energy(
     plan: ChargePlan,
-    current_import_price: float,
+    price_threshold: float,
     allowance_remaining_kwh: float,
-) -> tuple[float, float]:
-    """Split extra energy between now and forecast capacity at a lower cost."""
-    future_cheaper_kwh = future_capacity_below_price(plan, current_import_price)
-    return max(0.0, allowance_remaining_kwh - future_cheaper_kwh), future_cheaper_kwh
+) -> float:
+    """Schedule the remaining opportunistic allowance during qualifying slots."""
+    return add_energy_at_or_below_price(plan, allowance_remaining_kwh, price_threshold)
 
 
 def _hhmm(dt: datetime, tz: tzinfo) -> str:

@@ -87,81 +87,117 @@ def test_nothing_requested_stops_charging():
     assert P.plan_summary(plan, TZ) == "Daily amount reached"
 
 
-def test_opportunistic_price_threshold_is_inclusive_and_requires_price():
-    assert S.opportunistic_price_is_eligible(1.0, 1.0)
-    assert S.opportunistic_price_is_eligible(0.8, 1.0)
-    assert not S.opportunistic_price_is_eligible(1.01, 1.0)
-    assert not S.opportunistic_price_is_eligible(None, 1.0)
-
-
 def test_opportunistic_allowance_is_cumulative_and_soc_capped():
     assert S.opportunistic_kwh_remaining(10, 12, 5, 0, 2) == pytest.approx(2)
     assert S.opportunistic_kwh_remaining(10, 8, 5, 2, 2) == pytest.approx(0)
     assert S.opportunistic_kwh_remaining(10, 8, 5, 2, None) == pytest.approx(5)
 
 
-def test_opportunistic_energy_reserves_only_unallocated_cheaper_solar():
-    current = P.PlanSlot(DAY, DAY + timedelta(hours=1), 1.0, 0.5, 0.0)
-    future_solar = P.PlanSlot(
-        DAY + timedelta(hours=1),
-        DAY + timedelta(hours=2),
-        2.0,
-        0.4,
-        MAX_KW,
-    )
-    plan = P.plan_energy([current, future_solar], 1.0, MIN_KW, MAX_KW)
+def test_opportunistic_energy_is_scheduled_in_future_qualifying_slots():
+    slots = [
+        P.PlanSlot(DAY, DAY + timedelta(hours=1), 1.5, 0.5, 0.0),
+        P.PlanSlot(DAY + timedelta(hours=1), DAY + timedelta(hours=2), 1.04, 1.04, 0.0),
+        P.PlanSlot(DAY + timedelta(hours=2), DAY + timedelta(hours=3), 1.3, 0.5, 0.0),
+        P.PlanSlot(DAY + timedelta(hours=3), DAY + timedelta(hours=4), 1.21, 0.4, 0.0),
+    ]
+    plan = P.plan_energy(slots, 0, MIN_KW, MAX_KW)
 
-    extra_now, cheaper_future = S.opportunistic_energy_now(plan, 1.0, 1.0)
+    added = S.add_opportunistic_energy(plan, 1.04, 2.0)
 
-    assert plan.slots[1].solar_kwh == pytest.approx(1.0)
-    assert cheaper_future == pytest.approx(MAX_KW - 1.0)
-    assert extra_now == pytest.approx(0.0)
-
-
-def test_opportunistic_energy_adds_only_uncovered_amount_now():
-    current = P.PlanSlot(DAY, DAY + timedelta(hours=1), 1.0, 0.5, 0.0)
-    future_solar = P.PlanSlot(
-        DAY + timedelta(hours=1),
-        DAY + timedelta(hours=2),
-        2.0,
-        0.4,
-        MAX_KW,
-    )
-    plan = P.plan_energy([current, future_solar], 1.0, MIN_KW, MAX_KW)
-
-    extra_now, cheaper_future = S.opportunistic_energy_now(plan, 1.0, 3.0)
-
-    assert cheaper_future == pytest.approx(MAX_KW - 1.0)
-    assert extra_now == pytest.approx(3.0 - (MAX_KW - 1.0))
+    assert added == pytest.approx(2.0)
+    assert plan.slots[0].energy_kwh == pytest.approx(0.0)
+    assert plan.slots[1].energy_kwh == pytest.approx(2.0)
+    assert plan.slots[2].energy_kwh == pytest.approx(0.0)
+    assert plan.slots[3].energy_kwh == pytest.approx(0.0)
+    assert plan.requested_kwh == pytest.approx(2.0)
+    assert plan.planned_kwh == pytest.approx(2.0)
 
 
-def test_opportunistic_does_not_reserve_future_cheap_grid_import():
-    current = P.PlanSlot(DAY, DAY + timedelta(hours=1), 1.0, 0.5, 0.0)
-    future_import = P.PlanSlot(
-        DAY + timedelta(hours=1),
-        DAY + timedelta(hours=2),
-        0.4,
-        0.8,
-        0.0,
-    )
-    plan = P.plan_energy([current, future_import], 1.0, MIN_KW, MAX_KW)
+def test_opportunistic_energy_prioritizes_solar_below_price_threshold():
+    slots = [
+        P.PlanSlot(DAY, DAY + timedelta(hours=1), 1.04, 1.04, 0.0),
+        P.PlanSlot(
+            DAY + timedelta(hours=1),
+            DAY + timedelta(hours=2),
+            2.0,
+            0.4,
+            MAX_KW,
+        ),
+    ]
+    plan = P.plan_energy(slots, 0, MIN_KW, MAX_KW)
 
-    extra_now, cheaper_future = S.opportunistic_energy_now(plan, 1.0, 2.0)
+    added = S.add_opportunistic_energy(plan, 1.2, 2.0)
 
-    assert cheaper_future == pytest.approx(0.0)
-    assert extra_now == pytest.approx(2.0)
+    assert added == pytest.approx(2.0)
+    assert plan.slots[0].energy_kwh == pytest.approx(0.0)
+    assert plan.slots[1].energy_kwh == pytest.approx(2.0)
+    assert plan.slots[1].solar_kwh == pytest.approx(2.0)
 
 
-def test_add_current_slot_energy_updates_plan_without_exceeding_slot_capacity():
-    slot = P.PlanSlot(DAY, DAY + timedelta(hours=1), 1.0, 0.5, 0.0)
-    plan = P.plan_energy([slot], 2.0, MIN_KW, MAX_KW)
+def test_opportunistic_energy_uses_only_published_qualifying_price_slots():
+    slots = [
+        P.PlanSlot(
+            DAY,
+            DAY + timedelta(hours=1),
+            1.04,
+            1.04,
+            0.0,
+            estimated_price=True,
+        ),
+        P.PlanSlot(DAY + timedelta(hours=1), DAY + timedelta(hours=2), 1.04, 1.04, 0.0),
+    ]
+    plan = P.plan_energy(slots, 0, MIN_KW, MAX_KW)
 
-    added = P.add_current_slot_energy(plan, MAX_KW)
+    added = S.add_opportunistic_energy(plan, 1.2, 2.0)
 
-    assert added == pytest.approx(MAX_KW - 2.0)
+    assert added == pytest.approx(2.0)
+    assert plan.slots[0].energy_kwh == pytest.approx(0.0)
+    assert plan.slots[1].energy_kwh == pytest.approx(2.0)
+
+
+def test_opportunistic_energy_respects_remaining_slot_capacity_and_allowance():
+    slot = P.PlanSlot(DAY, DAY + timedelta(minutes=15), 1.04, 1.04, 0.0)
+    plan = P.plan_energy([slot], 0, MIN_KW, MAX_KW)
+
+    added = S.add_opportunistic_energy(plan, 1.2, 10.0)
+
+    assert added == pytest.approx(MAX_KW / 4)
+    assert plan.current.energy_kwh == pytest.approx(MAX_KW / 4)
+    assert plan.requested_kwh == pytest.approx(MAX_KW / 4)
+
+
+def test_opportunistic_energy_threshold_excludes_above_threshold_prices():
+    slot = P.PlanSlot(DAY, DAY + timedelta(hours=1), 1.21, 1.21, 0.0)
+    plan = P.plan_energy([slot], 0, MIN_KW, MAX_KW)
+
+    added = S.add_opportunistic_energy(plan, 1.2, 2.0)
+
+    assert added == 0
+    assert plan.planned_kwh == 0
+
+
+def test_opportunistic_energy_only_uses_finite_slot_capacity():
+    slot = P.PlanSlot(DAY, DAY + timedelta(hours=1), 1.04, 1.04, 0.0)
+    plan = P.plan_energy([slot], 0, MIN_KW, MAX_KW)
+
+    added = S.add_opportunistic_energy(plan, 1.2, 100.0)
+
+    assert added == pytest.approx(MAX_KW)
     assert plan.requested_kwh == pytest.approx(MAX_KW)
     assert plan.planned_kwh == pytest.approx(MAX_KW)
-    assert plan.current.energy_kwh == pytest.approx(MAX_KW)
+
+
+def test_opportunistic_planning_keeps_unqualifying_slots_off():
+    slot = P.PlanSlot(
+        DAY,
+        DAY + timedelta(hours=1),
+        2.0,
+        0.4,
+        0.0,
+    )
+    plan = P.plan_energy([slot], 0, MIN_KW, MAX_KW)
+
+    assert S.add_opportunistic_energy(plan, 1.2, 2.0) == 0
 
 
 def test_waits_until_planned_slot():

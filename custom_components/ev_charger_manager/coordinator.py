@@ -17,9 +17,8 @@ from homeassistant.util import dt as dt_util
 
 from .charge_strategy import (
     ChargeDecision,
-    opportunistic_energy_now,
+    add_opportunistic_energy,
     opportunistic_kwh_remaining,
-    opportunistic_price_is_eligible,
     strategy_asap,
     strategy_fixed_daily_amount,
     strategy_solar_excess,
@@ -69,7 +68,6 @@ from .data import EVChargerData
 from .planner import (
     DailyEnergyTracker,
     PriceInterval,
-    add_current_slot_energy,
     build_slots,
     parse_price_series,
     plan_attributes,
@@ -581,37 +579,44 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 min_saving=self.defer_min_saving / 100.0,
             )
             opportunistic_added_kwh = 0.0
-            cheaper_solar_kwh = 0.0
-            opportunistic_remaining = 0.0
-            if (
-                result.current_import_price is not None
-                and opportunistic_price_is_eligible(
-                    result.current_import_price, self.opportunistic_price
-                )
-            ):
-                opportunistic_remaining = opportunistic_kwh_remaining(
-                    self.daily_kwh + self._tracker.carry_over_kwh,
-                    self._tracker.delivered_kwh,
-                    self.opportunistic_kwh,
-                    remaining_kwh,
-                    result.ev_kwh_needed,
-                )
-                extra_now, cheaper_solar_kwh = opportunistic_energy_now(
+            opportunistic_remaining = opportunistic_kwh_remaining(
+                self.daily_kwh + self._tracker.carry_over_kwh,
+                self._tracker.delivered_kwh,
+                self.opportunistic_kwh,
+                remaining_kwh,
+                result.ev_kwh_needed,
+            )
+            if opportunistic_remaining > 0:
+                opportunistic_added_kwh = add_opportunistic_energy(
                     plan,
-                    result.current_import_price,
+                    self.opportunistic_price,
                     opportunistic_remaining,
                 )
-                opportunistic_added_kwh = add_current_slot_energy(plan, extra_now)
 
             self._tracker.deferred_kwh = plan.deferred_kwh
             # Preview of the next window: its own amount plus what is deferred
+            next_window_kwh = self.daily_kwh + plan.deferred_kwh
             next_plan = (
-                plan_energy(
-                    next_slots, self.daily_kwh + plan.deferred_kwh, min_kw, max_kw
-                )
+                plan_energy(next_slots, next_window_kwh, min_kw, max_kw)
                 if next_slots
                 else None
             )
+            if next_plan is not None:
+                next_opportunistic_kwh = self.opportunistic_kwh
+                if result.ev_kwh_needed is not None:
+                    next_opportunistic_kwh = min(
+                        next_opportunistic_kwh,
+                        max(
+                            0.0,
+                            result.ev_kwh_needed - remaining_kwh - next_window_kwh,
+                        ),
+                    )
+                if next_opportunistic_kwh > 0:
+                    add_opportunistic_energy(
+                        next_plan,
+                        self.opportunistic_price,
+                        next_opportunistic_kwh,
+                    )
             tz = dt_util.get_default_time_zone()
             decision = strategy_fixed_daily_amount(
                 plan,
@@ -626,26 +631,11 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 ),
             )
             if opportunistic_added_kwh > 0:
-                solar_note = (
-                    f"; holding {min(cheaper_solar_kwh, opportunistic_remaining):.1f} "
-                    "kWh for cheaper forecast solar"
-                    if cheaper_solar_kwh > 0
-                    else ""
-                )
                 decision = replace(
                     decision,
                     reason=(
-                        f"{decision.reason} Opportunistic: adding "
-                        f"{opportunistic_added_kwh:.1f} kWh{solar_note}."
-                    ),
-                )
-            elif cheaper_solar_kwh > 0 and opportunistic_remaining > 0:
-                decision = replace(
-                    decision,
-                    reason=(
-                        f"{decision.reason} Opportunistic: waiting for up to "
-                        f"{min(cheaper_solar_kwh, opportunistic_remaining):.1f} "
-                        "kWh of cheaper forecast solar."
+                        f"{decision.reason} Opportunistic: planning an additional "
+                        f"{opportunistic_added_kwh:.1f} kWh in qualifying price slots."
                     ),
                 )
             result.charge_plan = plan_summary(plan, tz)
