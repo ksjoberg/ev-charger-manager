@@ -72,10 +72,10 @@ from .planner import (
     DailyEnergyTracker,
     PriceInterval,
     build_slots,
+    charge_reason_plan_attributes,
     parse_price_series,
     plan_attributes,
     plan_energy,
-    plan_slots_raw,
     plan_summary,
     price_at,
 )
@@ -325,7 +325,7 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
 
     @property
     def opportunistic_price(self) -> float:
-        """Return the all-in import price threshold for opportunistic charging."""
+        """Return the net price threshold for opportunistic charging."""
         return float(
             self.config_entry.options.get(
                 CONF_OPPORTUNISTIC_PRICE, DEFAULT_OPPORTUNISTIC_PRICE
@@ -666,11 +666,13 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 "carried_over_kwh": round(self._tracker.carry_over_kwh, 2),
             }
             result.planned_cost = round(plan.cost, 2)
-            result.charge_reason_attributes = {
-                "raw_today": plan_slots_raw(plan, tz, watts_per_amp),
-                "raw_tomorrow": plan_slots_raw(next_plan, tz, watts_per_amp),
-                "tomorrow_valid": next_plan is not None,
-            }
+            result.charge_reason_attributes = charge_reason_plan_attributes(
+                plan,
+                next_plan,
+                tz,
+                watts_per_amp,
+                self._tracker.carry_over_kwh,
+            )
 
         # Round to whole amperes; apply dead-band to suppress minor fluctuations
         target_amps = round(decision.target_current)

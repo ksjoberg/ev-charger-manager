@@ -255,7 +255,7 @@ class EVChargerDeferMinSavingNumber(EVChargerManagerEntity, NumberEntity):
 
 
 class EVChargerOpportunisticPriceNumber(EVChargerManagerEntity, NumberEntity):
-    """Maximum import price for opportunistic charging."""
+    """Maximum net price for opportunistic charging."""
 
     _attr_icon = "mdi:cash-check"
     _attr_native_min_value = -100.0
@@ -270,7 +270,7 @@ class EVChargerOpportunisticPriceNumber(EVChargerManagerEntity, NumberEntity):
 
     @property
     def native_value(self) -> float:
-        """Return the configured all-in import price threshold."""
+        """Return the configured net price threshold."""
         return float(self.coordinator.opportunistic_price)
 
     async def async_set_native_value(self, value: float) -> None:
@@ -280,7 +280,7 @@ class EVChargerOpportunisticPriceNumber(EVChargerManagerEntity, NumberEntity):
 
 
 class EVChargerOpportunisticKwhNumber(EVChargerManagerEntity, NumberEntity):
-    """Extra energy allowed when the import price meets the threshold."""
+    """Extra energy allowed when the net price meets the threshold."""
 
     _attr_icon = "mdi:battery-plus"
     _attr_native_min_value = 0.0

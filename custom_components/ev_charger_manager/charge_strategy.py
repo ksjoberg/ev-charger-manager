@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from .planner import (
     ENERGY_EPS_KWH,
     ChargePlan,
-    add_energy_at_or_below_price,
+    add_energy_at_or_below_net_price,
 )
 
 if TYPE_CHECKING:
@@ -131,7 +131,9 @@ def add_opportunistic_energy(
     allowance_remaining_kwh: float,
 ) -> float:
     """Schedule the remaining opportunistic allowance during qualifying slots."""
-    return add_energy_at_or_below_price(plan, allowance_remaining_kwh, price_threshold)
+    return add_energy_at_or_below_net_price(
+        plan, allowance_remaining_kwh, price_threshold
+    )
 
 
 def _hhmm(dt: datetime, tz: tzinfo) -> str:
