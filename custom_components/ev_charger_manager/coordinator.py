@@ -17,6 +17,9 @@ from homeassistant.util import dt as dt_util
 
 from .charge_strategy import (
     ChargeDecision,
+    opportunistic_energy_now,
+    opportunistic_kwh_remaining,
+    opportunistic_price_is_eligible,
     strategy_asap,
     strategy_fixed_daily_amount,
     strategy_solar_excess,
@@ -40,6 +43,8 @@ from .const import (
     CONF_MIN_CURRENT,
     CONF_NORDPOOL_EXPORT_ENTITY,
     CONF_NORDPOOL_IMPORT_ENTITY,
+    CONF_OPPORTUNISTIC_KWH,
+    CONF_OPPORTUNISTIC_PRICE,
     CONF_PHASES,
     CONF_PV_POWER_ENTITY,
     CONF_VOLTAGE,
@@ -51,6 +56,8 @@ from .const import (
     DEFAULT_DEFER_MIN_SAVING,
     DEFAULT_MAX_CURRENT,
     DEFAULT_MIN_CURRENT,
+    DEFAULT_OPPORTUNISTIC_KWH,
+    DEFAULT_OPPORTUNISTIC_PRICE,
     DEFAULT_PHASES,
     DEFAULT_VOLTAGE,
     DOMAIN,
@@ -62,6 +69,7 @@ from .data import EVChargerData
 from .planner import (
     DailyEnergyTracker,
     PriceInterval,
+    add_current_slot_energy,
     build_slots,
     parse_price_series,
     plan_attributes,
@@ -293,6 +301,38 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         self.hass.config_entries.async_update_entry(
             self.config_entry,
             options={**self.config_entry.options, CONF_DEFER_MIN_SAVING: value},
+        )
+
+    @property
+    def opportunistic_price(self) -> float:
+        """Return the all-in import price threshold for opportunistic charging."""
+        return float(
+            self.config_entry.options.get(
+                CONF_OPPORTUNISTIC_PRICE, DEFAULT_OPPORTUNISTIC_PRICE
+            )
+        )
+
+    @opportunistic_price.setter
+    def opportunistic_price(self, value: float) -> None:
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={**self.config_entry.options, CONF_OPPORTUNISTIC_PRICE: value},
+        )
+
+    @property
+    def opportunistic_kwh(self) -> float:
+        """Return the extra energy allowed on a qualifying cheap day."""
+        return float(
+            self.config_entry.options.get(
+                CONF_OPPORTUNISTIC_KWH, DEFAULT_OPPORTUNISTIC_KWH
+            )
+        )
+
+    @opportunistic_kwh.setter
+    def opportunistic_kwh(self, value: float) -> None:
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={**self.config_entry.options, CONF_OPPORTUNISTIC_KWH: value},
         )
 
     # ------------------------------------------------------------------
@@ -540,6 +580,29 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 next_kwh=self.daily_kwh,
                 min_saving=self.defer_min_saving / 100.0,
             )
+            opportunistic_added_kwh = 0.0
+            cheaper_solar_kwh = 0.0
+            opportunistic_remaining = 0.0
+            if (
+                result.current_import_price is not None
+                and opportunistic_price_is_eligible(
+                    result.current_import_price, self.opportunistic_price
+                )
+            ):
+                opportunistic_remaining = opportunistic_kwh_remaining(
+                    self.daily_kwh + self._tracker.carry_over_kwh,
+                    self._tracker.delivered_kwh,
+                    self.opportunistic_kwh,
+                    remaining_kwh,
+                    result.ev_kwh_needed,
+                )
+                extra_now, cheaper_solar_kwh = opportunistic_energy_now(
+                    plan,
+                    result.current_import_price,
+                    opportunistic_remaining,
+                )
+                opportunistic_added_kwh = add_current_slot_energy(plan, extra_now)
+
             self._tracker.deferred_kwh = plan.deferred_kwh
             # Preview of the next window: its own amount plus what is deferred
             next_plan = (
@@ -562,6 +625,29 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                     window_start + timedelta(days=2) if import_series else None
                 ),
             )
+            if opportunistic_added_kwh > 0:
+                solar_note = (
+                    f"; holding {min(cheaper_solar_kwh, opportunistic_remaining):.1f} "
+                    "kWh for cheaper forecast solar"
+                    if cheaper_solar_kwh > 0
+                    else ""
+                )
+                decision = replace(
+                    decision,
+                    reason=(
+                        f"{decision.reason} Opportunistic: adding "
+                        f"{opportunistic_added_kwh:.1f} kWh{solar_note}."
+                    ),
+                )
+            elif cheaper_solar_kwh > 0 and opportunistic_remaining > 0:
+                decision = replace(
+                    decision,
+                    reason=(
+                        f"{decision.reason} Opportunistic: waiting for up to "
+                        f"{min(cheaper_solar_kwh, opportunistic_remaining):.1f} "
+                        "kWh of cheaper forecast solar."
+                    ),
+                )
             result.charge_plan = plan_summary(plan, tz)
             result.charge_plan_attributes = {
                 **plan_attributes(plan, tz),
