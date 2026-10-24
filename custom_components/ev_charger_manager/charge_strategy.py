@@ -110,6 +110,21 @@ def opportunistic_kwh_remaining(
     return remaining
 
 
+def fixed_daily_kwh_remaining(
+    daily_target_kwh: float,
+    carry_over_kwh: float,
+    delivered_kwh: float,
+    ev_kwh_needed: float | None,
+    fixed_target_kwh: float | None,
+) -> float:
+    """Return the daily base amount still due, capped by both SoC targets."""
+    remaining = max(0.0, daily_target_kwh + carry_over_kwh - delivered_kwh)
+    for target_kwh in (ev_kwh_needed, fixed_target_kwh):
+        if target_kwh is not None:
+            remaining = min(remaining, max(0.0, target_kwh))
+    return remaining
+
+
 def add_opportunistic_energy(
     plan: ChargePlan,
     price_threshold: float,

@@ -164,6 +164,9 @@
       "daily_kwh": {
         "name": "Fixed daily amount"
       },
+      "fixed_daily_target_soc": {
+        "name": "Fixed daily target SoC"
+      },
       "daily_reset_hour": {
         "name": "Daily window start hour"
       },

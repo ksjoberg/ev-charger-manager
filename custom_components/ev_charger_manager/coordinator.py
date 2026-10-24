@@ -18,6 +18,7 @@ from homeassistant.util import dt as dt_util
 from .charge_strategy import (
     ChargeDecision,
     add_opportunistic_energy,
+    fixed_daily_kwh_remaining,
     opportunistic_kwh_remaining,
     strategy_asap,
     strategy_fixed_daily_amount,
@@ -36,6 +37,7 @@ from .const import (
     CONF_EV_BATTERY_CAPACITY_ENTITY,
     CONF_EV_SOC_ENTITY,
     CONF_EV_TARGET_SOC_ENTITY,
+    CONF_FIXED_DAILY_TARGET_SOC,
     CONF_FORECAST_SOLAR_ENTITIES,
     CONF_GRID_POWER_ENTITY,
     CONF_MAX_CURRENT,
@@ -53,6 +55,7 @@ from .const import (
     DEFAULT_DAILY_KWH,
     DEFAULT_DAILY_RESET_HOUR,
     DEFAULT_DEFER_MIN_SAVING,
+    DEFAULT_FIXED_DAILY_TARGET_SOC,
     DEFAULT_MAX_CURRENT,
     DEFAULT_MIN_CURRENT,
     DEFAULT_OPPORTUNISTIC_KWH,
@@ -267,6 +270,25 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
         self.hass.config_entries.async_update_entry(
             self.config_entry,
             options={**self.config_entry.options, CONF_DAILY_KWH: value},
+        )
+
+    @property
+    def fixed_daily_target_soc(self) -> float:
+        """Return the SoC ceiling for the fixed daily amount."""
+        return float(
+            self.config_entry.options.get(
+                CONF_FIXED_DAILY_TARGET_SOC, DEFAULT_FIXED_DAILY_TARGET_SOC
+            )
+        )
+
+    @fixed_daily_target_soc.setter
+    def fixed_daily_target_soc(self, value: float) -> None:
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={
+                **self.config_entry.options,
+                CONF_FIXED_DAILY_TARGET_SOC: value,
+            },
         )
 
     @property
@@ -523,14 +545,14 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             )
 
         else:  # FIXED_DAILY_AMOUNT
-            remaining_kwh = max(
-                0.0,
-                self.daily_kwh
-                + self._tracker.carry_over_kwh
-                - self._tracker.delivered_kwh,
+            fixed_target_kwh = self._compute_ev_kwh_needed(self.fixed_daily_target_soc)
+            remaining_kwh = fixed_daily_kwh_remaining(
+                self.daily_kwh,
+                self._tracker.carry_over_kwh,
+                self._tracker.delivered_kwh,
+                result.ev_kwh_needed,
+                fixed_target_kwh,
             )
-            if result.ev_kwh_needed is not None:
-                remaining_kwh = min(remaining_kwh, result.ev_kwh_needed)
             result.daily_remaining_kwh = round(remaining_kwh, 2)
 
             deadline = window_start + timedelta(days=1)
@@ -724,8 +746,8 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
             return value * 1000.0
         return value
 
-    def _compute_ev_kwh_needed(self) -> float | None:
-        """Return the kWh still needed to reach the target SoC, or None if data is missing."""
+    def _compute_ev_kwh_needed(self, target_soc: float | None = None) -> float | None:
+        """Return kWh to a target SoC, or None if battery/SoC data is missing."""
 
         def _read_float(entity_id: str | None) -> float | None:
             if not entity_id:
@@ -742,7 +764,8 @@ class EVChargerManagerCoordinator(DataUpdateCoordinator[EVChargerData]):
                 return None
 
         capacity_kwh = _read_float(self.ev_battery_capacity_entity)
-        target_soc = _read_float(self.ev_target_soc_entity)
+        if target_soc is None:
+            target_soc = _read_float(self.ev_target_soc_entity)
         current_soc = _read_float(self.ev_soc_entity)
 
         if capacity_kwh is None or target_soc is None or current_soc is None:

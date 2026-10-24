@@ -34,6 +34,7 @@ async def async_setup_entry(
         EVChargerMaxCurrentNumber(coordinator),
         EVChargerDeadbandNumber(coordinator),
         EVChargerDailyKwhNumber(coordinator),
+        EVChargerFixedDailyTargetSocNumber(coordinator),
         EVChargerDailyResetHourNumber(coordinator),
         EVChargerDeferMinSavingNumber(coordinator),
         EVChargerOpportunisticPriceNumber(coordinator),
@@ -173,6 +174,32 @@ class EVChargerDailyKwhNumber(EVChargerManagerEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Store the new value and refresh the coordinator."""
         self.coordinator.daily_kwh = round(float(value), 1)
+        await self.coordinator.async_request_refresh()
+
+
+class EVChargerFixedDailyTargetSocNumber(EVChargerManagerEntity, NumberEntity):
+    """SoC ceiling for the base fixed daily amount."""
+
+    _attr_icon = "mdi:battery-medium"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 1
+    _attr_mode = NumberMode.BOX
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_translation_key = "fixed_daily_target_soc"
+
+    def __init__(self, coordinator: EVChargerManagerCoordinator) -> None:
+        """Initialize the number entity."""
+        super().__init__(coordinator, unique_id_suffix="fixed_daily_target_soc")
+
+    @property
+    def native_value(self) -> float:
+        """Return the fixed daily SoC ceiling."""
+        return float(self.coordinator.fixed_daily_target_soc)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Store the target and refresh the coordinator."""
+        self.coordinator.fixed_daily_target_soc = float(round(value))
         await self.coordinator.async_request_refresh()
 
 
