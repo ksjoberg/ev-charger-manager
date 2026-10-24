@@ -533,34 +533,48 @@ def plan_energy(
     return plan
 
 
-def add_current_slot_energy(plan: ChargePlan, energy_kwh: float) -> float:
-    """Add energy to the current slot without exceeding its maximum capacity."""
-    current = plan.current
-    if current is None or energy_kwh <= ENERGY_EPS_KWH:
+def add_energy_at_or_below_price(
+    plan: ChargePlan, energy_kwh: float, price_threshold: float
+) -> float:
+    """Add extra energy to published plan segments at or below a price threshold."""
+    if energy_kwh <= ENERGY_EPS_KWH:
         return 0.0
 
-    capacity = max(0.0, current.slot.hours * plan.max_kw - current.energy_kwh)
-    added = min(energy_kwh, capacity)
-    if added <= ENERGY_EPS_KWH:
-        return 0.0
-
-    current.energy_kwh += added
-    plan.requested_kwh += added
-    _finalize(plan)
-    return added
-
-
-def future_capacity_below_price(plan: ChargePlan, price: float) -> float:
-    """Return unallocated forecast solar energy priced below the given price."""
-    capacity = 0.0
-    for slot_plan in plan.slots[1:]:
-        if slot_plan.slot.export_price >= price:
+    candidates = []
+    for slot_index, slot_plan in enumerate(plan.slots):
+        if slot_plan.slot.estimated_price:
             continue
-        solar_capacity = (
-            min(slot_plan.slot.surplus_kw, plan.max_kw) * slot_plan.slot.hours
-        )
-        capacity += max(0.0, solar_capacity - slot_plan.solar_kwh)
-    return capacity
+        remaining = slot_plan.energy_kwh
+        for segment_index, (price, segment_kwh) in enumerate(
+            _slot_segments(slot_plan.slot, plan.min_kw, plan.max_kw)
+        ):
+            used = min(remaining, segment_kwh)
+            remaining -= used
+            available = segment_kwh - used
+            if price <= price_threshold and available > ENERGY_EPS_KWH:
+                candidates.append(
+                    (price, slot_plan.slot.start, segment_index, slot_index, available)
+                )
+
+    candidates.sort(key=lambda item: item[:3])
+    remaining_kwh = energy_kwh
+    additions: dict[int, float] = {}
+    for _, _, _, slot_index, available in candidates:
+        if remaining_kwh <= ENERGY_EPS_KWH:
+            break
+        added = min(remaining_kwh, available)
+        additions[slot_index] = additions.get(slot_index, 0.0) + added
+        remaining_kwh -= added
+
+    added_total = energy_kwh - remaining_kwh
+    if added_total <= ENERGY_EPS_KWH:
+        return 0.0
+
+    for slot_index, added in additions.items():
+        plan.slots[slot_index].energy_kwh += added
+    plan.requested_kwh += added_total
+    _finalize(plan)
+    return added_total
 
 
 def _plan_with_deferral(
